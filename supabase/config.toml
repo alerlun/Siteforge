@@ -1,0 +1,16 @@
+project_id = "siteforge"
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.generate-site]
+verify_jwt = true
+
+[functions.scrape-leads]
+verify_jwt = true
+
+[functions.create-checkout]
+verify_jwt = true
+
+[functions.create-portal]
+verify_jwt = true

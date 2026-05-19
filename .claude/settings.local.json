@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(node scripts/stripe-switch.js --mode test)",
+      "Bash(git --version)"
+    ]
+  }
+}
