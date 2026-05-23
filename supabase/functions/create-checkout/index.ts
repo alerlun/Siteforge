@@ -1,6 +1,7 @@
 // create-checkout — creates a Stripe Checkout session for the Pro plan.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
+import { getStripeConfig } from '../_shared/stripe.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -15,8 +16,7 @@ Deno.serve(async (req) => {
     }
     const { origin } = await req.json().catch(() => ({ origin: '' }));
     const baseUrl = origin || req.headers.get('origin') || '';
-    const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-    const priceId = Deno.env.get('STRIPE_PRO_PRICE_ID');
+    const { secretKey: stripeKey, proPriceId: priceId } = await getStripeConfig();
     if (!stripeKey || !priceId) {
       return new Response(JSON.stringify({ error: 'Stripe env not configured' }), {
         status: 500,

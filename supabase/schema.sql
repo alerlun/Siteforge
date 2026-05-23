@@ -4,17 +4,41 @@
 create extension if not exists "pgcrypto";
 create extension if not exists "pg_cron";
 
+-- plan enum
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'plan_tier') then
+    create type public.plan_tier as enum ('free', 'pro');
+  end if;
+end$$;
+
 -- profiles
 create table if not exists public.profiles (
   id uuid references auth.users on delete cascade primary key,
   email text,
-  plan text default 'free',
+  plan public.plan_tier default 'free',
   stripe_customer_id text,
   stripe_subscription_id text,
   leads_used integer default 0,
   generations_used integer default 0,
   created_at timestamptz default now()
 );
+
+-- Migration: convert existing text plan column to enum.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles'
+      and column_name = 'plan' and data_type = 'text'
+  ) then
+    alter table public.profiles
+      alter column plan drop default,
+      alter column plan type public.plan_tier
+        using (case when plan in ('free','pro') then plan::public.plan_tier else 'free'::public.plan_tier end),
+      alter column plan set default 'free';
+  end if;
+end$$;
 
 -- generated_sites
 create table if not exists public.generated_sites (
@@ -57,10 +81,9 @@ create table if not exists public.config (
 );
 
 -- Seed config rows (idempotent)
+-- stripe_mode: 'test' | 'live' — switches which Stripe key set the edge functions use.
 insert into public.config (key, value) values
-  ('stripe_mode', 'test'),
-  ('stripe_publishable_key', ''),
-  ('stripe_webhook_secret', '')
+  ('stripe_mode', 'test')
 on conflict (key) do nothing;
 
 -- ───────────── RLS ─────────────
@@ -116,6 +139,13 @@ create index if not exists chat_messages_session_idx
 
 alter table public.generated_sites
   add column if not exists session_id uuid references public.chat_sessions(id) on delete set null;
+
+-- one chat session per lead: lets a business reopen its existing chat
+alter table public.chat_sessions
+  add column if not exists lead_id uuid references public.leads(id) on delete set null;
+
+create unique index if not exists chat_sessions_lead_idx
+  on public.chat_sessions (lead_id) where lead_id is not null;
 
 alter table public.chat_sessions enable row level security;
 alter table public.chat_messages enable row level security;

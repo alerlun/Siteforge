@@ -100,6 +100,7 @@ export default function Leads() {
     navigate('/app/chat', {
       state: {
         prompt: parts,
+        leadId: lead.id,
         meta: {
           businessName: lead.business_name,
           clientLocation: lead.address,

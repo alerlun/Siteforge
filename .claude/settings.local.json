@@ -5,7 +5,10 @@
       "Bash(npm install *)",
       "Bash(npm run *)",
       "Bash(node scripts/stripe-switch.js --mode test)",
-      "Bash(git --version)"
+      "Bash(git --version)",
+      "mcp__ide__getDiagnostics",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)"
     ]
   }
 }

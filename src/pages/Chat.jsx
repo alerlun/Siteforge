@@ -13,6 +13,7 @@ export default function Chat() {
   const location = useLocation();
   const initialPrompt = location.state?.prompt ?? '';
   const initialMeta = location.state?.meta ?? null;
+  const initialLeadId = location.state?.leadId ?? null;
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -21,12 +22,15 @@ export default function Chat() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState(initialPrompt);
   const [meta, setMeta] = useState(initialMeta);
+  const [leadId, setLeadId] = useState(initialLeadId);
   const [html, setHtml] = useState('');
   const [latestSite, setLatestSite] = useState(null);
   const [busy, setBusy] = useState(false);
   const [limitHit, setLimitHit] = useState(false);
   const [error, setError] = useState('');
   const [saleOpen, setSaleOpen] = useState(false);
+  const [sidebarW, setSidebarW] = useState(224);
+  const [genW, setGenW] = useState(620);
   const threadRef = useRef(null);
 
   const limit = planLimit(profile, 'generations');
@@ -40,7 +44,7 @@ export default function Chat() {
     setSessionsLoading(true);
     const { data, error: err } = await supabase
       .from('chat_sessions')
-      .select('id, title, created_at, updated_at')
+      .select('id, title, lead_id, created_at, updated_at')
       .order('updated_at', { ascending: false });
     setSessionsLoading(false);
     if (err) {
@@ -52,12 +56,20 @@ export default function Chat() {
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
 
-  // Open the most recent session by default; if none, leave activeSessionId null
-  // so the next generate creates one.
+  // Pick the default session once sessions load.
+  // - Arrived from a lead: open that lead's existing chat if one exists;
+  //   otherwise leave activeSessionId null so the first generate creates one
+  //   tied to the lead — never hijack an unrelated recent chat.
+  // - Arrived plain: open the most recent session.
   useEffect(() => {
     if (sessionsLoading) return;
     if (activeSessionId) return;
     if (sessions.length === 0) return;
+    if (initialLeadId) {
+      const match = sessions.find((s) => s.lead_id === initialLeadId);
+      if (match) selectSession(match.id);
+      return;
+    }
     selectSession(sessions[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionsLoading, sessions]);
@@ -70,6 +82,7 @@ export default function Chat() {
 
   async function selectSession(id) {
     setActiveSessionId(id);
+    setLeadId(sessions.find((s) => s.id === id)?.lead_id ?? null);
     setMessages([]);
     setHtml('');
     setLatestSite(null);
@@ -96,6 +109,7 @@ export default function Chat() {
 
   function newSession() {
     setActiveSessionId(null);
+    setLeadId(null);
     setMessages([]);
     setHtml('');
     setLatestSite(null);
@@ -150,14 +164,18 @@ export default function Chat() {
         clientLocation: meta?.clientLocation ?? null,
         history,
         sessionId: activeSessionId,
+        leadId,
+        currentHtml: html || null,
       });
 
       const newSessionId = data.sessionId;
       const site = data.site;
       const reviewedNote = data.reviewed ? ' (reviewed)' : '';
-      const assistantContent = site?.business_name
-        ? `Generated site for "${site.business_name}"${reviewedNote}.`
-        : `Generated site${reviewedNote}.`;
+      const assistantContent = data.edited
+        ? `Updated the site${reviewedNote}.`
+        : site?.business_name
+          ? `Generated site for "${site.business_name}"${reviewedNote}.`
+          : `Generated site${reviewedNote}.`;
 
       // Backfill session linkage if it was just created server-side.
       if (newSessionId && newSessionId !== activeSessionId) {
@@ -225,7 +243,9 @@ export default function Chat() {
         onSelect={selectSession}
         onNew={newSession}
         onDelete={deleteSession}
+        width={sidebarW}
       />
+      <Divider onDrag={(dx) => setSidebarW((w) => clamp(w + dx, 160, 420))} />
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
           <div className="font-mono uppercase tracking-widest text-xs text-muted">
@@ -242,8 +262,8 @@ export default function Chat() {
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 grid" style={{ gridTemplateColumns: '60fr 40fr' }}>
-          <section className="flex flex-col min-h-0 border-r border-border">
+        <div className="flex-1 min-h-0 flex">
+          <section className="flex flex-col min-h-0 shrink-0" style={{ width: genW }}>
             <div ref={threadRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
               {messages.length === 0 && !busy && <EmptyState />}
               {messages.map((m, i) => (
@@ -268,7 +288,11 @@ export default function Chat() {
               <textarea
                 className="input font-mono resize-none"
                 rows={3}
-                placeholder="Paste business info — name, address, phone, hours, what they do…"
+                placeholder={
+                  html
+                    ? 'Tell it what to change — "make the header bigger", "fix the contact form", or describe a new site…'
+                    : 'Paste business info — name, address, phone, hours, what they do…'
+                }
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -282,7 +306,13 @@ export default function Chat() {
             </form>
           </section>
 
-          <section className="flex flex-col min-h-0">
+          <Divider
+            onDrag={(dx) =>
+              setGenW((w) => clamp(w + dx, 320, window.innerWidth - 480))
+            }
+          />
+
+          <section className="flex flex-col min-h-0 flex-1 min-w-0">
             <div className="px-5 h-12 border-b border-border flex items-center justify-between">
               <div className="font-mono uppercase tracking-widest text-xs text-muted">preview</div>
               <div className="flex items-center gap-2">
@@ -328,6 +358,38 @@ export default function Chat() {
         onSaved={(updated) => setLatestSite(updated)}
       />
     </div>
+  );
+}
+
+function clamp(v, lo, hi) {
+  return Math.min(Math.max(v, lo), hi);
+}
+
+function Divider({ onDrag }) {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    if (!active) return undefined;
+    const move = (e) => onDrag(e.movementX);
+    const up = () => setActive(false);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, [active, onDrag]);
+  return (
+    <>
+      <div
+        onPointerDown={() => setActive(true)}
+        className={`w-1 shrink-0 cursor-col-resize ${
+          active ? 'bg-accent' : 'bg-border hover:bg-accent'
+        }`}
+      />
+      {active && (
+        <div className="fixed inset-0 z-50 cursor-col-resize select-none" />
+      )}
+    </>
   );
 }
 

@@ -1,17 +1,7 @@
 // stripe-webhook — verifies signature, updates profiles on subscription events.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient } from '../_shared/auth.ts';
-
-async function readWebhookSecret(): Promise<string> {
-  const supabase = adminClient();
-  const { data } = await supabase
-    .from('config')
-    .select('value')
-    .eq('key', 'stripe_webhook_secret')
-    .single();
-  if (data?.value) return data.value as string;
-  return Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
-}
+import { getStripeConfig } from '../_shared/stripe.ts';
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -63,7 +53,17 @@ Deno.serve(async (req) => {
 
   const body = await req.text();
   const sig = req.headers.get('stripe-signature');
-  const secret = await readWebhookSecret();
+
+  let secret = '';
+  try {
+    secret = (await getStripeConfig()).webhookSecret;
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   const ok = await verifyStripeSignature(body, sig, secret);
   if (!ok) {
     return new Response(JSON.stringify({ error: 'invalid signature' }), {

@@ -5,9 +5,13 @@ export default function SessionsPanel({
   onNew,
   onDelete,
   loading,
+  width,
 }) {
   return (
-    <aside className="w-56 shrink-0 border-r border-border bg-surface flex flex-col">
+    <aside
+      className="shrink-0 bg-surface flex flex-col"
+      style={{ width }}
+    >
       <div className="px-3 py-3 border-b border-border">
         <button onClick={onNew} className="btn-primary w-full text-xs">+ New chat</button>
       </div>

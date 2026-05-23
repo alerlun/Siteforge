@@ -1,6 +1,7 @@
 // create-portal — creates a Stripe Billing Portal session.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
+import { getStripeConfig } from '../_shared/stripe.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -15,7 +16,7 @@ Deno.serve(async (req) => {
     }
     const { origin } = await req.json().catch(() => ({ origin: '' }));
     const baseUrl = origin || req.headers.get('origin') || '';
-    const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
+    const { secretKey: stripeKey } = await getStripeConfig();
     if (!stripeKey) {
       return new Response(JSON.stringify({ error: 'STRIPE_SECRET_KEY not configured' }), {
         status: 500,
