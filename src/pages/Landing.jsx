@@ -51,8 +51,8 @@ export default function Landing() {
               price="$0"
               cadence="forever"
               features={[
-                '3 website generations / month',
-                '100 leads / month',
+                '1 website generation / month',
+                '10 leads / month',
                 'Full-screen preview',
                 'Download HTML',
               ]}
@@ -62,11 +62,11 @@ export default function Landing() {
             />
             <PriceCard
               name="PRO"
-              price="$19.99"
+              price="$29.99"
               cadence="per month"
               features={[
                 '10 website generations / month',
-                '1,000 leads / month',
+                '100 leads / month',
                 'Full-screen preview',
                 'Download HTML',
                 'Lead export to CSV',

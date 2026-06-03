@@ -19,6 +19,6 @@ export async function getUser(req: Request) {
 }
 
 export const PLAN_LIMITS = {
-  free: { generations: 3, leads: 100 },
-  pro: { generations: 10, leads: 1000 },
+  free: { generations: 1, leads: 10 },
+  pro: { generations: 10, leads: 100 },
 } as const;

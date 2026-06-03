@@ -1,6 +1,9 @@
 // scrape-leads — calls Google Places Text Search + Place Details, persists results.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser, PLAN_LIMITS } from '../_shared/auth.ts';
+import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
+import { scrapeLeadsSchema } from '../_shared/validation.ts';
+import { enforce } from '../_shared/ratelimit.ts';
 
 const RADIUS_METERS: Record<string, number> = {
   '1mi': 1609,
@@ -34,32 +37,24 @@ Deno.serve(async (req) => {
 
   try {
     const user = await getUser(req);
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    if (!user) return errorResponse(401, 'Unauthorized');
 
-    const { businessType, city, radius, maxResults, websiteFilter } = await req.json();
+    const ipBlocked = await enforce('scrape', clientIp(req));
+    if (ipBlocked) return ipBlocked;
+    const userBlocked = await enforce('scrape', user.id);
+    if (userBlocked) return userBlocked;
+
+    const raw = await readBoundedJson(req);
+    const parsed = scrapeLeadsSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
+    const { businessType, city, radius, maxResults, websiteFilter } = parsed.data;
     // 'without' (default) = website-less only; 'both' = keep all.
     const includeWithWebsite = websiteFilter === 'both';
-    if (!businessType || !city) {
-      return new Response(JSON.stringify({ error: 'businessType and city required' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const cap = Math.min(Math.max(parseInt(maxResults ?? '20', 10) || 20, 1), 100);
-    const radiusM = RADIUS_METERS[radius] ?? RADIUS_METERS['5mi'];
+    const cap = Math.min(Math.max(maxResults ?? 20, 1), 100);
+    const radiusM = RADIUS_METERS[radius ?? '5mi'] ?? RADIUS_METERS['5mi'];
 
     const apiKey = Deno.env.get('GOOGLE_PLACES_API_KEY');
-    if (!apiKey) {
-      return new Response(JSON.stringify({ error: 'GOOGLE_PLACES_API_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    if (!apiKey) return errorResponse(500, 'GOOGLE_PLACES_API_KEY not configured');
 
     const supabase = adminClient();
     const { data: profile } = await supabase
@@ -180,9 +175,6 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return fromHttpError(err);
   }
 });

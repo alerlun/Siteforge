@@ -1,6 +1,11 @@
 // generate-site — single Claude build call (or Edit for follow-up chat messages)
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser, PLAN_LIMITS } from '../_shared/auth.ts';
+import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
+import { generateSiteSchema } from '../_shared/validation.ts';
+import { enforce } from '../_shared/ratelimit.ts';
+
+const MAX_BODY_BYTES = 640 * 1024; // currentHtml can be large in edit mode
 
 const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-5';
 const ANTHROPIC_VERSION = '2023-06-01';
@@ -37,9 +42,7 @@ function detectLanguage(location: string, businessName: string, prompt: string):
 function buildSystemPrompt(lang: LangInfo): string {
   return `You are an expert web designer and developer. Build a complete, polished, single-page marketing website for the business described by the user.
 
-Recognise the business type and design something genuinely appropriate and distinctive for it. A coffee shop, a law firm, a tattoo studio, a dentist, and a gym should each get a clearly different result — different layout, section order, color palette, typography, and mood. Use your own taste and judgement. Never reuse the same template or structure twice. If the user gave design instructions, follow them.
-
-Make it genuinely good: a strong hero, thoughtful visual hierarchy, real sections with realistic invented content (services, pricing, testimonials, opening hours, contact, etc. — whatever fits this business), a smooth responsive layout on mobile, and tasteful colour. Aim for something you would be proud to ship — clean, modern, and aesthetic.
+It should support every device.
 
 LANGUAGE: Every visible word must be in ${lang.name} (${lang.nativeName}) — navigation, headings, body text, buttons, forms, footer. Only HTML/CSS/JS code is excepted.
 
@@ -146,12 +149,17 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   try {
     const user = await getUser(req);
-    if (!user) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!user) return errorResponse(401, 'Unauthorized');
 
-    const body = await req.json();
-    const { prompt, businessName, businessType, clientLocation, history, sessionId, leadId, currentHtml } = body ?? {};
+    const ipBlocked = await enforce('generate', clientIp(req));
+    if (ipBlocked) return ipBlocked;
+    const userBlocked = await enforce('generate', user.id);
+    if (userBlocked) return userBlocked;
 
-    if (!prompt || typeof prompt !== 'string') return new Response(JSON.stringify({ error: 'prompt required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const raw = await readBoundedJson(req, MAX_BODY_BYTES);
+    const parsed = generateSiteSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
+    const { prompt, businessName, businessType, clientLocation, history, sessionId, leadId, currentHtml } = parsed.data;
 
     const supabase = adminClient();
     const { data: profile, error: profileErr } = await supabase.from('profiles').select('plan, generations_used').eq('id', user.id).single();
@@ -266,6 +274,6 @@ ${prompt}`;
     return new Response(JSON.stringify({ site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (err) {
-    return new Response(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return fromHttpError(err);
   }
 });

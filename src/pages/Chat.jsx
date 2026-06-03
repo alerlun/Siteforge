@@ -24,6 +24,7 @@ export default function Chat() {
   const [meta, setMeta] = useState(initialMeta);
   const [leadId, setLeadId] = useState(initialLeadId);
   const [html, setHtml] = useState('');
+  const [previewUrl, setPreviewUrl] = useState('');
   const [latestSite, setLatestSite] = useState(null);
   const [busy, setBusy] = useState(false);
   const [limitHit, setLimitHit] = useState(false);
@@ -55,6 +56,20 @@ export default function Chat() {
   }, [user?.id]);
 
   useEffect(() => { loadSessions(); }, [loadSessions]);
+
+  // Render the AI-generated site through a blob: URL rather than srcDoc. Two reasons:
+  // (1) A blob document does NOT inherit the app's Content-Security-Policy, so generated
+  //     sites can freely use their own inline scripts, fonts, and external images.
+  // (2) Combined with a sandbox that omits `allow-same-origin`, the preview runs in an
+  //     opaque origin and cannot read the parent's localStorage — where the Supabase
+  //     session token lives. This stops generated/edited HTML from exfiltrating the
+  //     user's auth token (XSS / token theft). The URL is revoked when html changes.
+  useEffect(() => {
+    if (!html) { setPreviewUrl(''); return; }
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [html]);
 
   // Pick the default session once sessions load.
   // - Arrived from a lead: open that lead's existing chat if one exists;
@@ -226,12 +241,12 @@ export default function Chat() {
 
   function openFullscreen() {
     if (!html) return;
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
-    }
+    // Open via a blob: URL rather than document.write into about:blank. `noopener`
+    // severs the new tab's access to window.opener (prevents reverse tabnabbing by the
+    // generated page). Revoke after a delay so the navigation has completed.
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   return (
@@ -334,12 +349,14 @@ export default function Chat() {
               </div>
             </div>
             <div className="flex-1 min-h-0 bg-black">
-              {html ? (
+              {previewUrl ? (
                 <iframe
                   title="preview"
-                  srcDoc={html}
+                  src={previewUrl}
                   className="w-full h-full bg-white"
-                  sandbox="allow-scripts allow-same-origin allow-forms"
+                  // No allow-same-origin: preview runs in an opaque origin and cannot
+                  // reach the parent window / localStorage / Supabase session token.
+                  sandbox="allow-scripts allow-forms allow-popups allow-modals"
                 />
               ) : (
                 <div className="h-full flex items-center justify-center font-mono text-xs text-muted">

@@ -31,8 +31,8 @@ export async function callFunction(name, body = {}) {
 }
 
 export const PLAN_LIMITS = {
-  free: { generations: 3, leads: 100 },
-  pro: { generations: 10, leads: 1000 },
+  free: { generations: 1, leads: 10 },
+  pro: { generations: 10, leads: 100 },
 };
 
 export function planLimit(profile, kind) {

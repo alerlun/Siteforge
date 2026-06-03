@@ -2,27 +2,28 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
+import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
+import { createCheckoutSchema } from '../_shared/validation.ts';
+import { enforce } from '../_shared/ratelimit.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const user = await getUser(req);
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const { origin } = await req.json().catch(() => ({ origin: '' }));
-    const baseUrl = origin || req.headers.get('origin') || '';
+    if (!user) return errorResponse(401, 'Unauthorized');
+
+    const ipBlocked = await enforce('checkout', clientIp(req));
+    if (ipBlocked) return ipBlocked;
+    const userBlocked = await enforce('checkout', user.id);
+    if (userBlocked) return userBlocked;
+
+    const raw = await readBoundedJson(req);
+    const parsed = createCheckoutSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
+    const baseUrl = parsed.data.origin || req.headers.get('origin') || '';
     const { secretKey: stripeKey, proPriceId: priceId } = await getStripeConfig();
-    if (!stripeKey || !priceId) {
-      return new Response(JSON.stringify({ error: 'Stripe env not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    if (!stripeKey || !priceId) return errorResponse(500, 'Stripe env not configured');
 
     const supabase = adminClient();
     const { data: profile } = await supabase
@@ -66,9 +67,6 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return fromHttpError(err);
   }
 });

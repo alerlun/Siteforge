@@ -2,39 +2,35 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
+import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
+import { createPortalSchema } from '../_shared/validation.ts';
+import { enforce } from '../_shared/ratelimit.ts';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
     const user = await getUser(req);
-    if (!user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    const { origin } = await req.json().catch(() => ({ origin: '' }));
-    const baseUrl = origin || req.headers.get('origin') || '';
+    if (!user) return errorResponse(401, 'Unauthorized');
+
+    const ipBlocked = await enforce('portal', clientIp(req));
+    if (ipBlocked) return ipBlocked;
+    const userBlocked = await enforce('portal', user.id);
+    if (userBlocked) return userBlocked;
+
+    const raw = await readBoundedJson(req);
+    const parsed = createPortalSchema.safeParse(raw);
+    if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
+    const baseUrl = parsed.data.origin || req.headers.get('origin') || '';
     const { secretKey: stripeKey } = await getStripeConfig();
-    if (!stripeKey) {
-      return new Response(JSON.stringify({ error: 'STRIPE_SECRET_KEY not configured' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    if (!stripeKey) return errorResponse(500, 'STRIPE_SECRET_KEY not configured');
     const supabase = adminClient();
     const { data: profile } = await supabase
       .from('profiles')
       .select('stripe_customer_id')
       .eq('id', user.id)
       .single();
-    if (!profile?.stripe_customer_id) {
-      return new Response(JSON.stringify({ error: 'No Stripe customer on file' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
+    if (!profile?.stripe_customer_id) return errorResponse(400, 'No Stripe customer on file');
     const params = new URLSearchParams();
     params.set('customer', profile.stripe_customer_id);
     params.set('return_url', `${baseUrl}/app/settings`);
@@ -57,9 +53,6 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return fromHttpError(err);
   }
 });

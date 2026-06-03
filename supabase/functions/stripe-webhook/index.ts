@@ -2,6 +2,10 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
+import { readBoundedText, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
+import { enforce } from '../_shared/ratelimit.ts';
+
+const MAX_WEBHOOK_BYTES = 512 * 1024; // Stripe events can be large (invoices, many line items)
 
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -51,32 +55,36 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405, headers: corsHeaders });
   }
 
-  const body = await req.text();
+  try {
+    const ipBlocked = await enforce('webhook', clientIp(req));
+    if (ipBlocked) return ipBlocked;
+  } catch (err) {
+    return fromHttpError(err);
+  }
+
+  let body: string;
+  try {
+    body = await readBoundedText(req, MAX_WEBHOOK_BYTES);
+  } catch (err) {
+    return fromHttpError(err);
+  }
   const sig = req.headers.get('stripe-signature');
 
   let secret = '';
   try {
     secret = (await getStripeConfig()).webhookSecret;
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return fromHttpError(err);
   }
 
   const ok = await verifyStripeSignature(body, sig, secret);
-  if (!ok) {
-    return new Response(JSON.stringify({ error: 'invalid signature' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
+  if (!ok) return errorResponse(400, 'invalid signature');
 
   let event: any;
   try {
     event = JSON.parse(body);
   } catch {
-    return new Response('bad json', { status: 400, headers: corsHeaders });
+    return errorResponse(400, 'bad json');
   }
 
   const supabase = adminClient();
@@ -110,10 +118,7 @@ Deno.serve(async (req) => {
       }
     }
   } catch (err) {
-    return new Response(JSON.stringify({ error: String(err?.message ?? err) }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return fromHttpError(err);
   }
 
   return new Response(JSON.stringify({ received: true }), {

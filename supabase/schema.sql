@@ -200,3 +200,76 @@ begin
   end if;
 end;
 $$;
+
+-- ───────────── rate limiting (Postgres-backed; no external Redis) ─────────────
+-- Fixed-window counters enforced atomically by check_rate_limit(). Edge Functions call
+-- it through the service-role client (see _shared/ratelimit.ts). RLS is enabled with no
+-- policies, so anon/auth roles get zero access — only the service role (which bypasses
+-- RLS) can read or write counters.
+create table if not exists public.rate_limits (
+  key text primary key,
+  count integer not null default 0,
+  window_start timestamptz not null default now()
+);
+
+alter table public.rate_limits enable row level security;
+
+create or replace function public.check_rate_limit(
+  p_key text,
+  p_limit integer,
+  p_window_seconds integer
+)
+returns table(allowed boolean, remaining integer, reset_at timestamptz)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer;
+  v_window_start timestamptz;
+  v_now timestamptz := now();
+begin
+  -- Single atomic upsert: open a fresh window when the previous one has expired,
+  -- otherwise increment the existing counter. The row lock on conflict serialises
+  -- concurrent requests for the same key, so the count is race-free.
+  insert into public.rate_limits as rl (key, count, window_start)
+  values (p_key, 1, v_now)
+  on conflict (key) do update
+    set count = case
+          when rl.window_start < v_now - make_interval(secs => p_window_seconds) then 1
+          else rl.count + 1
+        end,
+        window_start = case
+          when rl.window_start < v_now - make_interval(secs => p_window_seconds) then v_now
+          else rl.window_start
+        end
+  returning rl.count, rl.window_start into v_count, v_window_start;
+
+  return query select
+    v_count <= p_limit,
+    greatest(0, p_limit - v_count),
+    v_window_start + make_interval(secs => p_window_seconds);
+end;
+$$;
+
+-- Purge expired counters hourly so the table stays small (the longest window is 1 min).
+create or replace function public.purge_rate_limits()
+returns void
+language sql
+as $$
+  delete from public.rate_limits where window_start < now() - interval '1 hour';
+$$;
+
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.unschedule('siteforge_purge_rate_limits')
+      where exists (select 1 from cron.job where jobname = 'siteforge_purge_rate_limits');
+    perform cron.schedule(
+      'siteforge_purge_rate_limits',
+      '0 * * * *',
+      $cron$select public.purge_rate_limits();$cron$
+    );
+  end if;
+end;
+$$;
