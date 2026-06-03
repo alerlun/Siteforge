@@ -8,6 +8,8 @@ import Chat from './pages/Chat.jsx';
 import Leads from './pages/Leads.jsx';
 import Stats from './pages/Stats.jsx';
 import Settings from './pages/Settings.jsx';
+import Privacy from './pages/Privacy.jsx';
+import Terms from './pages/Terms.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import ConsentBanner from './components/ConsentBanner.jsx';
 import { initAnalytics, trackPageView } from './lib/analytics.js';
@@ -27,6 +29,8 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
       <Route
         path="/app"
         element={

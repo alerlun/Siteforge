@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, Link } from 'react-router-dom';
 
 const NAV = [
   { to: '/app/chat', label: 'Chat', icon: ChatIcon },
@@ -33,8 +33,12 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="px-4 py-3 border-t border-border font-mono text-[10px] text-muted">
-        v0.1.0
+      <div className="px-4 py-3 border-t border-border font-mono text-[10px] text-muted space-y-2">
+        <div className="flex gap-3">
+          <Link to="/privacy" className="hover:text-text">Privacy</Link>
+          <Link to="/terms" className="hover:text-text">Terms</Link>
+        </div>
+        <div>v0.1.0</div>
       </div>
     </aside>
   );

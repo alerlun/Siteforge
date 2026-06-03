@@ -64,7 +64,12 @@ export default function Signup() {
           <div className="flex-1 h-px bg-border" />
         </div>
         <button onClick={onGoogle} className="btn w-full">Continue with Google</button>
-        <div className="mt-6 font-mono text-xs text-muted text-center">
+        <p className="mt-4 font-mono text-[11px] leading-relaxed text-muted text-center">
+          By signing up you agree to our{' '}
+          <Link to="/terms" className="text-accent">Terms</Link> and{' '}
+          <Link to="/privacy" className="text-accent">Privacy Policy</Link>.
+        </p>
+        <div className="mt-4 font-mono text-xs text-muted text-center">
           Have an account? <Link to="/login" className="text-accent">Sign in</Link>
         </div>
       </div>

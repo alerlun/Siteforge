@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { grantConsent, denyConsent, storedConsent } from '../lib/analytics.js';
 
 // Cookie-consent bar for GA Consent Mode v2. Shows only when no prior choice exists
@@ -19,7 +20,8 @@ export default function ConsentBanner() {
       <div className="max-w-6xl mx-auto px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
         <p className="text-sm text-muted">
           We use analytics cookies to understand how SiteForge is used. You can accept or
-          decline.
+          decline. See our{' '}
+          <Link to="/privacy" className="text-accent">Privacy Policy</Link>.
         </p>
         <div className="flex gap-2 shrink-0">
           <button

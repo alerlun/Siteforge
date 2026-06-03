@@ -80,9 +80,12 @@ export default function Landing() {
       </section>
 
       <footer className="border-t border-border">
-        <div className="max-w-6xl mx-auto px-6 py-8 font-mono text-xs text-muted flex justify-between">
+        <div className="max-w-6xl mx-auto px-6 py-8 font-mono text-xs text-muted flex flex-wrap gap-x-6 gap-y-2 items-center justify-between">
           <span>SiteForge © {new Date().getFullYear()}</span>
-          <span>built for freelancers and agencies</span>
+          <span className="flex gap-4">
+            <Link to="/privacy" className="hover:text-text">Privacy</Link>
+            <Link to="/terms" className="hover:text-text">Terms</Link>
+          </span>
         </div>
       </footer>
     </div>
