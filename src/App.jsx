@@ -1,4 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Landing from './pages/Landing.jsx';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
@@ -8,9 +9,20 @@ import Leads from './pages/Leads.jsx';
 import Stats from './pages/Stats.jsx';
 import Settings from './pages/Settings.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
+import ConsentBanner from './components/ConsentBanner.jsx';
+import { initAnalytics, trackPageView } from './lib/analytics.js';
 
 export default function App() {
+  const location = useLocation();
+
+  // Init GA once, then send a page view on every client-side route change.
+  useEffect(() => { initAnalytics(); }, []);
+  useEffect(() => {
+    trackPageView(location.pathname + location.search);
+  }, [location.pathname, location.search]);
+
   return (
+    <>
     <Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/login" element={<Login />} />
@@ -31,5 +43,7 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    <ConsentBanner />
+    </>
   );
 }
