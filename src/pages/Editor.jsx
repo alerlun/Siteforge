@@ -94,10 +94,20 @@ const SELECTION_SCRIPT = `
 `;
 
 function injectSelectionScript(html) {
+  // Blob URLs inherit the parent page's origin, so Vercel's CSP would block
+  // inline scripts in the generated site. Inject a permissive CSP meta tag
+  // early in <head> to give the preview iframe its own policy.
+  const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;">`;
   const scriptTag = `<script>${SELECTION_SCRIPT}<\/script>`;
-  const bodyClose = html.lastIndexOf('</body>');
-  if (bodyClose !== -1) return html.slice(0, bodyClose) + scriptTag + html.slice(bodyClose);
-  return html + scriptTag;
+
+  let result = html;
+  const headOpen = result.indexOf('<head>');
+  if (headOpen !== -1) {
+    result = result.slice(0, headOpen + 6) + cspMeta + result.slice(headOpen + 6);
+  }
+  const bodyClose = result.lastIndexOf('</body>');
+  if (bodyClose !== -1) return result.slice(0, bodyClose) + scriptTag + result.slice(bodyClose);
+  return result + scriptTag;
 }
 
 const DEVICES = [
