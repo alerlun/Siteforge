@@ -2,7 +2,7 @@ import LegalLayout, { LegalSection } from '../components/LegalLayout.jsx';
 
 // NOTE: This is a plain-language starting template, not legal advice. Review with
 // counsel and update the contact address / company details before relying on it.
-const CONTACT = 'support@siteforge.app';
+const CONTACT = 'alerlunai@gmail.com';
 
 export default function Privacy() {
   return (

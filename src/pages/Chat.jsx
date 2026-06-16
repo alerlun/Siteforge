@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
-import { callFunction, planLimit } from '../lib/api.js';
+import { callFunction } from '../lib/api.js';
 import { downloadHtml } from '../lib/utils.js';
+import { estimateCredits, formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
 import SaleModal from '../components/SaleModal.jsx';
 import SessionsPanel from '../components/SessionsPanel.jsx';
 
@@ -34,9 +35,10 @@ export default function Chat() {
   const [genW, setGenW] = useState(620);
   const threadRef = useRef(null);
 
-  const limit = planLimit(profile, 'generations');
-  const used = profile?.generations_used ?? 0;
-  const remaining = Math.max(0, limit - used);
+  const creditBalance = profile?.credit_balance ?? 0;
+  const monthlyAllowance = MONTHLY_ALLOWANCE[profile?.plan === 'pro' ? 'pro' : 'free'];
+  const genEstimate = estimateCredits(html ? 'edit' : 'generation');
+  const canGenerate = creditBalance >= genEstimate;
   const planLabel = profile?.plan === 'pro' ? '[PRO]' : '[FREE]';
 
   // Load sessions on mount.
@@ -149,7 +151,7 @@ export default function Chat() {
     if (!input.trim() || busy) return;
     setError('');
     setLimitHit(false);
-    if (remaining <= 0) {
+    if (!canGenerate) {
       setLimitHit(true);
       return;
     }
@@ -227,10 +229,11 @@ export default function Chat() {
       await refreshProfile();
       loadSessions();
     } catch (err) {
-      if (err.status === 402 || err.message === 'limit_reached') {
+      if (err.status === 402) {
         setLimitHit(true);
       } else {
-        setError(err.message || 'Generation failed.');
+        const detail = err.data?.detail;
+        setError(detail ? `${err.message}: ${detail}` : (err.message || 'Generation failed.'));
       }
     } finally {
       setBusy(false);
@@ -271,8 +274,9 @@ export default function Chat() {
             <button
               className="font-mono text-xs uppercase tracking-wider text-muted hover:text-accent"
               onClick={() => navigate('/app/settings')}
+              title={`${formatCredits(creditBalance)} / ${formatCredits(monthlyAllowance)} credits remaining`}
             >
-              Generations: {used}/{limit}
+              Credits: {formatCredits(creditBalance)}
             </button>
           </div>
         </header>
@@ -287,9 +291,12 @@ export default function Chat() {
               {busy && <TypingIndicator />}
               {limitHit && (
                 <div className="card border-accent p-4 font-mono text-sm">
-                  Generation limit reached. Upgrade to Pro for 10/month.
-                  <div className="mt-3">
-                    <Link to="/app/settings" className="btn-primary">Upgrade</Link>
+                  Not enough credits. Balance: {formatCredits(creditBalance)}.{' '}
+                  {profile?.plan !== 'pro' && 'Upgrade to Pro for 10× more credits per month.'}
+                  <div className="mt-3 flex gap-2">
+                    <Link to="/app/settings" className="btn-primary">
+                      {profile?.plan === 'pro' ? 'View Usage' : 'Upgrade'}
+                    </Link>
                   </div>
                 </div>
               )}
@@ -337,6 +344,13 @@ export default function Chat() {
                   onClick={() => setSaleOpen(true)}
                 >
                   Mark Sold
+                </button>
+                <button
+                  className="btn"
+                  disabled={!latestSite}
+                  onClick={() => navigate(`/app/editor/${latestSite.id}`)}
+                >
+                  Customize
                 </button>
                 <button className="btn" disabled={!html} onClick={openFullscreen}>Fullscreen</button>
                 <button

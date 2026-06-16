@@ -8,6 +8,7 @@ import Chat from './pages/Chat.jsx';
 import Leads from './pages/Leads.jsx';
 import Stats from './pages/Stats.jsx';
 import Settings from './pages/Settings.jsx';
+import Editor from './pages/Editor.jsx';
 import Privacy from './pages/Privacy.jsx';
 import Terms from './pages/Terms.jsx';
 import ProtectedRoute from './components/ProtectedRoute.jsx';
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="leads" element={<Leads />} />
         <Route path="stats" element={<Stats />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="editor/:siteId" element={<Editor />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

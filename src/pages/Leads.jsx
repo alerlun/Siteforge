@@ -5,6 +5,16 @@ import { supabase } from '../lib/supabase.js';
 import { useAuth } from '../lib/auth.jsx';
 import { callFunction, planLimit } from '../lib/api.js';
 import StatusBadge from '../components/StatusBadge.jsx';
+import { formatDate } from '../lib/utils.js';
+
+function DetailField({ label, children }) {
+  return (
+    <div>
+      <div className="label text-[9px] mb-1">{label}</div>
+      <div>{children}</div>
+    </div>
+  );
+}
 
 const RADIUS_OPTIONS = ['1mi', '5mi', '10mi', '25mi'];
 const RESULT_OPTIONS = [20, 50, 100];
@@ -19,6 +29,7 @@ export default function Leads() {
   const [maxResults, setMaxResults] = useState(20);
   const [websiteFilter, setWebsiteFilter] = useState('without');
   const [rows, setRows] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
@@ -206,38 +217,100 @@ export default function Leads() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
-                <tr key={r.id}>
-                  <td className="font-mono">{r.business_name}</td>
-                  <td className="text-muted">{r.business_type || '—'}</td>
-                  <td className="font-mono">{r.phone || <span className="text-muted">—</span>}</td>
-                  <td>{r.address || <span className="text-muted">—</span>}</td>
-                  <td className="font-mono">{r.rating ? `${r.rating} (${r.review_count ?? 0})` : <span className="text-muted">—</span>}</td>
-                  <td>
-                    {r.has_website ? (
-                      <a href={r.website_url || '#'} target="_blank" rel="noreferrer">
-                        <StatusBadge value="has_website" />
-                      </a>
-                    ) : (
-                      <StatusBadge value="no_website" />
-                    )}
-                  </td>
-                  <td>
-                    <select
-                      className="input py-1"
-                      value={r.status ?? 'new'}
-                      onChange={(e) => updateStatus(r.id, e.target.value)}
-                    >
-                      {STATUS_OPTIONS.map((s) => (
-                        <option key={s} value={s}>{s}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <button className="btn" onClick={() => generateForLead(r)}>Generate Site</button>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((r) => {
+                const isExpanded = expandedId === r.id;
+                return [
+                  <tr
+                    key={r.id}
+                    className="cursor-pointer hover:bg-surface/50"
+                    onClick={() => setExpandedId(isExpanded ? null : r.id)}
+                  >
+                    <td className="font-mono">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="text-muted text-[10px]">{isExpanded ? '▼' : '▶'}</span>
+                        {r.business_name}
+                      </span>
+                    </td>
+                    <td className="text-muted">{r.business_type || '—'}</td>
+                    <td className="font-mono">{r.phone || <span className="text-muted">—</span>}</td>
+                    <td>{r.address || <span className="text-muted">—</span>}</td>
+                    <td className="font-mono">{r.rating ? `${r.rating} (${r.review_count ?? 0})` : <span className="text-muted">—</span>}</td>
+                    <td>
+                      {r.has_website ? (
+                        <a href={r.website_url || '#'} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                          <StatusBadge value="has_website" />
+                        </a>
+                      ) : (
+                        <StatusBadge value="no_website" />
+                      )}
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <select
+                        className="input py-1"
+                        value={r.status ?? 'new'}
+                        onChange={(e) => updateStatus(r.id, e.target.value)}
+                      >
+                        {STATUS_OPTIONS.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <button className="btn" onClick={() => generateForLead(r)}>Generate Site</button>
+                    </td>
+                  </tr>,
+                  isExpanded && (
+                    <tr key={`${r.id}-detail`} className="bg-surface/30">
+                      <td colSpan={8} className="px-6 py-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
+                          <DetailField label="EMAIL">
+                            {r.email
+                              ? <a href={`mailto:${r.email}`} className="text-accent hover:underline" onClick={(e) => e.stopPropagation()}>{r.email}</a>
+                              : <span className="text-muted">—</span>}
+                          </DetailField>
+                          <DetailField label="WEBSITE URL">
+                            {r.website_url
+                              ? <a href={r.website_url} target="_blank" rel="noreferrer" className="text-accent hover:underline truncate block max-w-[200px]" onClick={(e) => e.stopPropagation()}>{r.website_url}</a>
+                              : <span className="text-muted">none</span>}
+                          </DetailField>
+                          <DetailField label="DATE CAPTURED">
+                            {formatDate(r.created_at)}
+                          </DetailField>
+                          <DetailField label="LEAD ID">
+                            <span className="text-muted text-[10px] break-all">{r.id}</span>
+                          </DetailField>
+                          <DetailField label="REVIEWS">
+                            {r.review_count != null ? `${r.review_count} reviews` : <span className="text-muted">—</span>}
+                          </DetailField>
+                          <DetailField label="RATING">
+                            {r.rating != null ? `${r.rating} / 5` : <span className="text-muted">—</span>}
+                          </DetailField>
+                          <DetailField label="STATUS">
+                            <select
+                              className="input py-1 text-xs"
+                              value={r.status ?? 'new'}
+                              onChange={(e) => { e.stopPropagation(); updateStatus(r.id, e.target.value); }}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {STATUS_OPTIONS.map((s) => (
+                                <option key={s} value={s}>{s}</option>
+                              ))}
+                            </select>
+                          </DetailField>
+                          <DetailField label="ACTION">
+                            <button
+                              className="btn-primary text-xs py-1 px-3"
+                              onClick={(e) => { e.stopPropagation(); generateForLead(r); }}
+                            >
+                              Generate Site →
+                            </button>
+                          </DetailField>
+                        </div>
+                      </td>
+                    </tr>
+                  ),
+                ];
+              })}
             </tbody>
           </table>
         )}

@@ -273,3 +273,104 @@ begin
   end if;
 end;
 $$;
+
+-- ───────────── credits system ─────────────
+
+-- Credit balance on profiles (replaces generations_used as the enforcement mechanism;
+-- generations_used kept for stats/analytics).
+alter table public.profiles
+  add column if not exists credit_balance bigint default 0;
+
+-- Credit rates and monthly allowances stored in config so they can be tuned without
+-- a code deploy. All numeric values stored as text (config table is key-value).
+insert into public.config (key, value) values
+  ('credit_in_rate',      '1'),      -- credits charged per input token
+  ('credit_out_rate',     '5'),      -- credits charged per output token
+  ('credit_margin',       '1.1'),    -- overhead multiplier (10 % buffer)
+  ('credit_monthly_free', '68000'),  -- ≈ 1 full generation
+  ('credit_monthly_pro',  '680000')  -- ≈ 10 full generations
+on conflict (key) do nothing;
+
+-- Ledger: every Claude call records what was charged and why.
+create table if not exists public.credit_ledger (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid references public.profiles(id) on delete cascade,
+  action_type text not null,  -- 'generation' | 'edit' | 'element_edit' | 'classify'
+  input_tokens  integer not null default 0,
+  output_tokens integer not null default 0,
+  credits_charged bigint not null default 0,
+  site_id     uuid references public.generated_sites(id) on delete set null,
+  created_at  timestamptz default now()
+);
+
+create index if not exists credit_ledger_user_idx
+  on public.credit_ledger (user_id, created_at desc);
+
+alter table public.credit_ledger enable row level security;
+
+drop policy if exists "credit_ledger self read" on public.credit_ledger;
+create policy "credit_ledger self read" on public.credit_ledger
+  for select using (auth.uid() = user_id);
+
+-- Atomically deduct credits; returns new balance (can go slightly negative on race).
+create or replace function public.deduct_credits(
+  p_user_id uuid,
+  p_credits  bigint
+)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_balance bigint;
+begin
+  update profiles
+    set credit_balance = credit_balance - p_credits
+  where id = p_user_id
+  returning credit_balance into v_balance;
+  return v_balance;
+end;
+$$;
+
+-- Update monthly reset to also restore credit balances from config.
+create or replace function public.reset_monthly_counters()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_free bigint;
+  v_pro  bigint;
+begin
+  select value::bigint into v_free from public.config where key = 'credit_monthly_free';
+  select value::bigint into v_pro  from public.config where key = 'credit_monthly_pro';
+
+  update public.profiles set
+    leads_used        = 0,
+    generations_used  = 0,
+    credit_balance    = case
+      when plan = 'pro' then coalesce(v_pro,  680000)
+      else                   coalesce(v_free,  68000)
+    end;
+end;
+$$;
+
+-- One-time migration: seed credit_balance for existing users who have never had credits.
+do $$
+declare
+  v_free bigint;
+  v_pro  bigint;
+begin
+  select value::bigint into v_free from public.config where key = 'credit_monthly_free';
+  select value::bigint into v_pro  from public.config where key = 'credit_monthly_pro';
+
+  update public.profiles set
+    credit_balance = case
+      when plan = 'pro' then coalesce(v_pro,  680000)
+      else                   coalesce(v_free,  68000)
+    end
+  where credit_balance = 0 or credit_balance is null;
+end;
+$$;

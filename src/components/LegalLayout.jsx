@@ -31,7 +31,7 @@ export default function LegalLayout({ title, lastUpdated, children }) {
 
       <footer className="border-t border-border">
         <div className="max-w-3xl mx-auto px-6 py-8 font-mono text-xs text-muted flex flex-wrap gap-x-6 gap-y-2 justify-between">
-          <span>SiteForge © {new Date().getFullYear()}</span>
+          <span>SiteForge {new Date().getFullYear()}</span>
           <span className="flex gap-4">
             <Link to="/" className="hover:text-text">Home</Link>
             <Link to="/privacy" className="hover:text-text">Privacy</Link>

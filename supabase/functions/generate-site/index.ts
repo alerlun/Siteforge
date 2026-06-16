@@ -7,8 +7,71 @@ import { enforce } from '../_shared/ratelimit.ts';
 
 const MAX_BODY_BYTES = 640 * 1024; // currentHtml can be large in edit mode
 
-const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-5';
+const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-6';
 const ANTHROPIC_VERSION = '2023-06-01';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CREDIT RATES (mirrors config table; fetched fresh each request)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Credits stay well within Number.MAX_SAFE_INTEGER — no BigInt needed.
+interface CreditRates {
+  inRate: number;
+  outRate: number;
+  margin: number;
+  monthlyFree: number;
+  monthlyPro: number;
+}
+
+// deno-lint-ignore no-explicit-any
+async function getCreditRates(supabase: any): Promise<CreditRates> {
+  const { data } = await supabase.from('config').select('key, value').in('key', [
+    'credit_in_rate', 'credit_out_rate', 'credit_margin',
+    'credit_monthly_free', 'credit_monthly_pro',
+  ]);
+  const m = new Map((data ?? []).map((r: { key: string; value: string }) => [r.key, r.value]));
+  return {
+    inRate:      parseFloat(m.get('credit_in_rate')   ?? '1'),
+    outRate:     parseFloat(m.get('credit_out_rate')  ?? '5'),
+    margin:      parseFloat(m.get('credit_margin')    ?? '1.1'),
+    monthlyFree: parseInt(m.get('credit_monthly_free') ?? '68000', 10),
+    monthlyPro:  parseInt(m.get('credit_monthly_pro')  ?? '680000', 10),
+  };
+}
+
+interface TokenUsage { input_tokens: number; output_tokens: number; }
+
+function computeCredits(usage: TokenUsage, rates: CreditRates): number {
+  return Math.ceil((usage.input_tokens * rates.inRate + usage.output_tokens * rates.outRate) * rates.margin);
+}
+
+function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean): number {
+  const inputEst  = isEdit ? 15000 : (hasHistory ? 3000 : 1200);
+  const outputEst = isEdit ? 12000 : 8000;
+  return computeCredits({ input_tokens: inputEst, output_tokens: outputEst }, rates);
+}
+
+// deno-lint-ignore no-explicit-any
+async function deductCredits(
+  supabase: any,
+  userId: string,
+  totalUsage: TokenUsage,
+  actionType: string,
+  rates: CreditRates,
+  siteId: string | null,
+): Promise<void> {
+  const credits = computeCredits(totalUsage, rates);
+  // Both calls are best-effort: they silently no-op before the migration runs.
+  await supabase.rpc('deduct_credits', { p_user_id: userId, p_credits: credits }).then(null, () => {});
+  await supabase.from('credit_ledger').insert({
+    user_id: userId,
+    action_type: actionType,
+    input_tokens: totalUsage.input_tokens,
+    output_tokens: totalUsage.output_tokens,
+    credits_charged: credits,
+    site_id: siteId ?? null,
+  }).then(null, () => {});
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LANGUAGE DETECTION
@@ -36,20 +99,86 @@ function detectLanguage(location: string, businessName: string, prompt: string):
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// STYLE PRESETS — injected randomly so every generation has a distinct aesthetic
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STYLE_PRESETS = [
+  {
+    name: 'Dark Luxury',
+    palette: 'Near-black bg (#111), off-white text (#f5f5f0), warm gold accent (#c9a84c).',
+    typography: 'Cormorant Garamond display + DM Sans body. Hero: clamp(3rem,6vw,5rem) weight 300.',
+    layout: 'Full-bleed dark hero, editorial centered type, generous section padding, thin horizontal rules.',
+  },
+  {
+    name: 'Light Editorial',
+    palette: 'Warm cream bg (#fafaf7), near-black text (#1a1a1a), one muted accent (sage #7a9e7e or dusty rose #c4857a).',
+    typography: 'Playfair Display + Inter. Section labels in small-caps with letter-spacing.',
+    layout: 'Magazine asymmetric grid. Pull-quote testimonials. Services in refined grid. Strong negative space.',
+  },
+  {
+    name: 'Scandinavian Minimal',
+    palette: 'White or light gray bg (#f8f8f8), charcoal text (#2d2d2d), single nature accent (forest #3d6b52 or slate #5c7a8a).',
+    typography: 'DM Serif Display + Outfit. Restrained scale, whitespace does the work.',
+    layout: 'Symmetric grid, thin 1px borders, minimal decoration, services as clean list.',
+  },
+  {
+    name: 'Bold Type-Driven',
+    palette: 'White bg + one vivid accent (electric blue #2563eb, deep red #c0392b, or emerald #065f46). High contrast only.',
+    typography: 'Fraunces or Syne weight 900 + Inter. Hero headline: clamp(4rem,9vw,8rem).',
+    layout: 'Type IS the design. Color-block section dividers. Oversized stat numbers. Large full-width CTA.',
+  },
+  {
+    name: 'Warm Artisanal',
+    palette: 'Warm linen bg (#f2ece3), espresso text (#2c1a10), earth accents (terracotta #c4724a or olive #6b7c3d).',
+    typography: 'Lora italic display + Karla body. Warm, crafted, personal.',
+    layout: 'Story-driven hero, rounded cards (8px), soft shadows, organic feel.',
+  },
+  {
+    name: 'Contemporary Studio',
+    palette: 'Warm gray bg (#e8e5e0), dark slate text (#1c2333), bold accent (cobalt #1e40af or plum #5b21b6).',
+    typography: 'Space Grotesk headlines + Inter body. Geometric, confident.',
+    layout: 'Architectural grid, color-blocked service cards, stats row with large numerals.',
+  },
+  {
+    name: 'Deep Navy Prestige',
+    palette: 'Rich navy bg (#0a1628), white text, silver/teal accent (#64b5a8).',
+    typography: 'Libre Baskerville display + Lato body. All-caps subheadings with letter-spacing.',
+    layout: 'Authority-first hero, trust/stats row, named testimonials, clear contact section.',
+  },
+  {
+    name: 'Fresh Modern',
+    palette: 'White bg (#ffffff), near-black text (#111827), one vivid accent chosen for this specific business.',
+    typography: 'Sora or Nunito + Inter. Friendly, approachable, energetic.',
+    layout: 'Hero with gradient accent band, icon-free feature blocks (bold numbers/labels), mobile-first flow.',
+  },
+] as const;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // HTML BUILD — open prompt; the model designs freely, like a direct Claude chat
 // ─────────────────────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(lang: LangInfo): string {
-  return `You are an expert web designer and developer. Build a complete, polished, single-page marketing website for the business described by the user.
+  const preset = STYLE_PRESETS[Math.floor(Math.random() * STYLE_PRESETS.length)];
 
-It should support every device.
+  return `You are an award-winning web designer. Build a luxurious, high-converting single-page marketing website for the business described.
 
-LANGUAGE: Every visible word must be in ${lang.name} (${lang.nativeName}) — navigation, headings, body text, buttons, forms, footer. Only HTML/CSS/JS code is excepted.
+STYLE: ${preset.name}
+- Colors: ${preset.palette}
+- Type: ${preset.typography}
+- Layout: ${preset.layout}
+
+RULES:
+- NO emojis anywhere. NO icon libraries (Font Awesome etc.).
+- Unique to THIS business — derive palette voice and copy from the name, type, and location. Do not use generic industry defaults.
+- Section order: hero (bold value prop) → trust/stats → services → testimonial → CTA → footer.
+- Write real, specific marketing copy. Not "We are committed to excellence." Write like a copywriter who studied this business.
+- Fully responsive (320px–1440px). CSS transitions on hover. scroll-behavior: smooth.
+- Language: every visible word in ${lang.name} (${lang.nativeName}). Code excepted.
 
 TECHNICAL:
-- One self-contained HTML file: all CSS in a <style> in <head>, all JS in a <script> before </body>.
-- Google Fonts are allowed via <link> in <head>. No other external libraries or frameworks.
-- Output raw HTML only, starting with <!DOCTYPE html>. No markdown, no code fences, no commentary before or after.`;
+- Single self-contained HTML file. All CSS in <style>, minimal JS in <script> before </body>.
+- Google Fonts via <link> only. No other external resources.
+- Output raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no commentary.`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,17 +190,19 @@ function editSystemPrompt(lang: LangInfo): string {
 
 RULES:
 - Apply ONLY what the change request asks. Do not redesign, do not touch unrelated sections, do not "improve" things that were not mentioned.
-- Preserve the existing design style, color palette, fonts, gradient, layout structure, and all other content exactly — unless the change request explicitly asks to change them.
+- Preserve the existing design style, color palette, fonts, layout structure, and all other content exactly — unless the change request explicitly asks to change them.
 - Keep all visible copy in ${lang.name} (${lang.nativeName}). Only HTML/CSS/JS code is excepted.
 - Keep the document complete and valid — all CSS in <style>, all JS in <script>, no broken tags.
+- Do NOT introduce emojis anywhere, even if the change request seems to suggest them.
 - If the request is vague, make the smallest reasonable change that satisfies it.
 
 Return the COMPLETE updated HTML document, starting with <!DOCTYPE html>. No markdown, no code fences, no explanation before or after.`;
 }
 
 // Decide whether a chat message is an edit to the current site or a request for a new one.
-async function classifyEditRequest(apiKey: string, prompt: string): Promise<boolean> {
-  const raw = await callClaude(apiKey, [
+// Returns { isEdit, usage } so classify tokens can be counted toward the total.
+async function classifyEditRequest(apiKey: string, prompt: string): Promise<{ isEdit: boolean; usage: TokenUsage }> {
+  const { text, usage } = await callClaude(apiKey, [
     {
       role: 'system',
       content:
@@ -79,7 +210,7 @@ async function classifyEditRequest(apiKey: string, prompt: string): Promise<bool
     },
     { role: 'user', content: prompt },
   ], 0, 8);
-  return /edit/i.test(raw);
+  return { isEdit: /edit/i.test(text), usage };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,12 +237,13 @@ function extractHtml(text: string): string {
 }
 
 // Anthropic Messages API: system prompt is top-level, messages are user/assistant only.
+// Returns both the text content and the token usage reported by the API.
 async function callClaude(
   apiKey: string,
   messages: Array<{ role: string; content: string }>,
   temperature = 0.85,
   maxTokens = 16000,
-): Promise<string> {
+): Promise<{ text: string; usage: TokenUsage }> {
   const systemParts: string[] = [];
   const convo: Array<{ role: 'user' | 'assistant'; content: string }> = [];
   for (const m of messages) {
@@ -138,7 +270,12 @@ async function callClaude(
   if (!res.ok) { const d = await res.text(); throw new Error(`anthropic_error: ${res.status} ${d}`); }
   const payload = await res.json();
   const blocks = (payload?.content as Array<{ type: string; text?: string }>) ?? [];
-  return blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+  const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
+  const usage: TokenUsage = {
+    input_tokens:  payload?.usage?.input_tokens  ?? 0,
+    output_tokens: payload?.usage?.output_tokens ?? 0,
+  };
+  return { text, usage };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -162,11 +299,11 @@ Deno.serve(async (req) => {
     const { prompt, businessName, businessType, clientLocation, history, sessionId, leadId, currentHtml } = parsed.data;
 
     const supabase = adminClient();
-    const { data: profile, error: profileErr } = await supabase.from('profiles').select('plan, generations_used').eq('id', user.id).single();
+    // Select * so missing columns (e.g. credit_balance before migration) don't crash the query.
+    const { data: profile, error: profileErr } = await supabase.from('profiles').select('*').eq('id', user.id).single();
     if (profileErr || !profile) return new Response(JSON.stringify({ error: 'Profile not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-    const limit = PLAN_LIMITS[(profile.plan as 'free' | 'pro') ?? 'free'].generations;
-    if (profile.generations_used >= limit) return new Response(JSON.stringify({ error: 'limit_reached', plan: profile.plan, limit }), { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    const rates = await getCreditRates(supabase);
 
     const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
     if (!apiKey) return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -184,9 +321,27 @@ Deno.serve(async (req) => {
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
     let isEditMode = false;
+    const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+
+    // Pre-flight credit check using a conservative estimate.
+    // Fall back to full monthly allowance when migration hasn't run yet (credit_balance null/undefined).
+    const fallbackBalance = profile.plan === 'pro' ? rates.monthlyPro : rates.monthlyFree;
+    const estimate = estimateCredits(rates, hasExistingSite, Array.isArray(history) && history.length > 0);
+    const currentBalance: number = (profile.credit_balance != null) ? Number(profile.credit_balance) : fallbackBalance;
+    if (currentBalance < estimate) {
+      return new Response(
+        JSON.stringify({ error: 'insufficient_credits', balance: currentBalance, estimate }),
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     if (hasExistingSite) {
-      try { isEditMode = await classifyEditRequest(apiKey, prompt); }
-      catch { isEditMode = false; }
+      try {
+        const result = await classifyEditRequest(apiKey, prompt);
+        isEditMode = result.isEdit;
+        totalUsage.input_tokens  += result.usage.input_tokens;
+        totalUsage.output_tokens += result.usage.output_tokens;
+      } catch { isEditMode = false; }
     }
 
     let html = '';
@@ -196,10 +351,12 @@ Deno.serve(async (req) => {
     if (isEditMode) {
       // ── EDIT MODE: refine the existing site from a chat instruction ──────────
       try {
-        const editRaw = await callClaude(apiKey, [
+        const { text: editRaw, usage: editUsage } = await callClaude(apiKey, [
           { role: 'system', content: editSystemPrompt(lang) },
           { role: 'user', content: `CURRENT HTML:\n${currentHtml}\n\nCHANGE REQUEST:\n${prompt}` },
-        ], 0.4, 20000);
+        ], 0.4, 12000);
+        totalUsage.input_tokens  += editUsage.input_tokens;
+        totalUsage.output_tokens += editUsage.output_tokens;
         const editedHtml = extractHtml(editRaw);
         if (editedHtml && /<!DOCTYPE\s+html/i.test(editedHtml) && editedHtml.length > 5000) {
           html = editedHtml;
@@ -225,7 +382,9 @@ ${prompt}`;
       buildMessages.push({ role: 'user', content: buildUserMessage });
 
       try {
-        const raw = await callClaude(apiKey, buildMessages, 1.0, 20000);
+        const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 10000);
+        totalUsage.input_tokens  += buildUsage.input_tokens;
+        totalUsage.output_tokens += buildUsage.output_tokens;
         html = extractHtml(raw);
 
         if (isSkeletalOutput(html)) {
@@ -235,7 +394,9 @@ ${prompt}`;
             { role: 'assistant', content: html },
             { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
           ];
-          const retryRaw = await callClaude(apiKey, retryMessages, 1.0, 20000);
+          const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 10000);
+          totalUsage.input_tokens  += retryUsage.input_tokens;
+          totalUsage.output_tokens += retryUsage.output_tokens;
           const retryHtml = extractHtml(retryRaw);
           if (retryHtml && /<!DOCTYPE\s+html/i.test(retryHtml) && retryHtml.length > 4000) html = retryHtml;
         }
@@ -269,9 +430,15 @@ ${prompt}`;
     }).select().single();
     if (siteErr) return new Response(JSON.stringify({ error: siteErr.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
+    // Increment the legacy counter (kept for stats) and deduct credits.
     await supabase.from('profiles').update({ generations_used: (profile.generations_used ?? 0) + 1 }).eq('id', user.id);
+    const actionType = isEditMode ? 'edit' : 'generation';
+    await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
 
-    return new Response(JSON.stringify({ site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    // Return actual credits used so the client can update its display.
+    const creditsUsed = Number(computeCredits(totalUsage, rates));
+
+    return new Response(JSON.stringify({ site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang, creditsUsed }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (err) {
     return fromHttpError(err);

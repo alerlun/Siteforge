@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
-import { callFunction, planLimit } from '../lib/api.js';
-import { nextResetDate } from '../lib/utils.js';
+import { callFunction } from '../lib/api.js';
+import { nextResetDate, formatDate } from '../lib/utils.js';
+import { formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
 
 export default function Settings() {
   const { user, profile, refreshProfile, signOut } = useAuth();
@@ -26,10 +27,26 @@ export default function Settings() {
 
   const isPro = profile?.plan === 'pro';
   const planLabel = isPro ? 'PRO PLAN' : 'FREE PLAN';
-  const generationsLimit = planLimit(profile, 'generations');
-  const leadsLimit = planLimit(profile, 'leads');
-  const generationsUsed = profile?.generations_used ?? 0;
+  const leadsLimit = isPro ? 100 : 10;
   const leadsUsed = profile?.leads_used ?? 0;
+  const creditBalance = profile?.credit_balance ?? 0;
+  const monthlyAllowance = MONTHLY_ALLOWANCE[isPro ? 'pro' : 'free'];
+
+  const [ledger, setLedger] = useState([]);
+  const [ledgerLoading, setLedgerLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data } = await supabase
+        .from('credit_ledger')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      if (active) { setLedger(data ?? []); setLedgerLoading(false); }
+    })();
+    return () => { active = false; };
+  }, []);
 
   async function startCheckout() {
     setBusy(true);
@@ -93,12 +110,49 @@ export default function Settings() {
             )}
           </div>
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
-            <UsageBar label="GENERATIONS" used={generationsUsed} limit={generationsLimit} />
+            <UsageBar
+              label="CREDITS"
+              used={monthlyAllowance - creditBalance}
+              limit={monthlyAllowance}
+              formatValue={formatCredits}
+            />
             <UsageBar label="LEADS" used={leadsUsed} limit={leadsLimit} />
           </div>
           <div className="mt-4 font-mono text-xs text-muted">
-            Counters reset on {nextResetDate()}.
+            Credits reset on {nextResetDate()}. Unused credits do not roll over.
           </div>
+        </div>
+
+        <div className="card">
+          <div className="px-5 py-4 border-b border-border label">credit usage (last 20)</div>
+          {ledgerLoading ? (
+            <div className="p-4 font-mono text-xs text-muted">loading…</div>
+          ) : ledger.length === 0 ? (
+            <div className="p-4 font-mono text-xs text-muted">no usage yet.</div>
+          ) : (
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Input</th>
+                  <th>Output</th>
+                  <th>Credits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledger.map((row) => (
+                  <tr key={row.id}>
+                    <td className="font-mono text-muted">{formatDate(row.created_at)}</td>
+                    <td className="font-mono">{row.action_type}</td>
+                    <td className="font-mono text-muted">{row.input_tokens.toLocaleString()}</td>
+                    <td className="font-mono text-muted">{row.output_tokens.toLocaleString()}</td>
+                    <td className="font-mono">{formatCredits(row.credits_charged)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         <div className="card p-5 space-y-3">
@@ -119,13 +173,14 @@ export default function Settings() {
   );
 }
 
-function UsageBar({ label, used, limit }) {
+function UsageBar({ label, used, limit, formatValue }) {
+  const fmt = formatValue ?? ((n) => n);
   const pct = Math.min(100, limit ? (used / limit) * 100 : 0);
   return (
     <div className="border border-border p-3">
       <div className="flex items-center justify-between font-mono text-xs">
         <span className="text-muted">{label}</span>
-        <span>{used}/{limit}</span>
+        <span>{fmt(used)}/{fmt(limit)}</span>
       </div>
       <div className="mt-2 h-1.5 bg-bg border border-border">
         <div className="h-full bg-accent" style={{ width: `${pct}%` }} />

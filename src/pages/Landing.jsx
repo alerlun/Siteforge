@@ -5,8 +5,8 @@ export default function Landing() {
     <div className="min-h-screen grid-bg text-text">
       <header className="border-b border-border">
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div className="font-mono uppercase tracking-widest text-sm">
-            Site<span className="text-accent">Forge</span>
+          <div className="logo">
+           <img src="./lib/img/siteforge_mark_512.png" alt="SiteForge logo" className="h-8 w-auto" />
           </div>
           <nav className="flex items-center gap-3">
             <Link to="/login" className="font-mono text-sm uppercase text-muted hover:text-text">Login</Link>
@@ -81,7 +81,7 @@ export default function Landing() {
 
       <footer className="border-t border-border">
         <div className="max-w-6xl mx-auto px-6 py-8 font-mono text-xs text-muted flex flex-wrap gap-x-6 gap-y-2 items-center justify-between">
-          <span>SiteForge © {new Date().getFullYear()}</span>
+          <span>SiteForge {new Date().getFullYear()}</span>
           <span className="flex gap-4">
             <Link to="/privacy" className="hover:text-text">Privacy</Link>
             <Link to="/terms" className="hover:text-text">Terms</Link>
