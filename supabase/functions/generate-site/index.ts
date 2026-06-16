@@ -219,13 +219,14 @@ async function classifyEditRequest(apiKey: string, prompt: string): Promise<{ is
 
 // Only flags genuinely broken or truncated output — not design choices.
 function isSkeletalOutput(html: string): boolean {
+  // Missing closing tag alone means truncation — always retry.
+  if (!/<\/html>/i.test(html)) return true;
   const failures = [
     !/<!DOCTYPE\s+html/i.test(html),
-    !/<\/html>/i.test(html),
     !html.includes('<style'),
     html.length < 4000,
   ];
-  return failures.filter(Boolean).length >= 2;
+  return failures.filter(Boolean).length >= 1;
 }
 
 function extractHtml(text: string): string {
@@ -382,7 +383,7 @@ ${prompt}`;
       buildMessages.push({ role: 'user', content: buildUserMessage });
 
       try {
-        const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 10000);
+        const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 16000);
         totalUsage.input_tokens  += buildUsage.input_tokens;
         totalUsage.output_tokens += buildUsage.output_tokens;
         html = extractHtml(raw);
@@ -394,7 +395,7 @@ ${prompt}`;
             { role: 'assistant', content: html },
             { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
           ];
-          const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 10000);
+          const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 16000);
           totalUsage.input_tokens  += retryUsage.input_tokens;
           totalUsage.output_tokens += retryUsage.output_tokens;
           const retryHtml = extractHtml(retryRaw);
