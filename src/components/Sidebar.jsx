@@ -1,4 +1,5 @@
 import { NavLink, Link } from 'react-router-dom';
+import logo from '../lib/img/siteforge_mark_64.png';
 
 const NAV = [
   { to: '/app/chat', label: 'Chat', icon: ChatIcon },
@@ -11,9 +12,7 @@ export default function Sidebar() {
   return (
     <aside className="w-48 shrink-0 border-r border-border bg-surface flex flex-col">
       <div className="px-4 py-5 border-b border-border">
-        <div className="font-mono uppercase tracking-widest text-sm text-text">
-          Site<span className="text-accent">Forge</span>
-        </div>
+        <img src={logo} alt="SiteForge" className="h-7 w-auto" />
       </div>
       <nav className="flex-1 py-3">
         {NAV.map((item) => (

@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom';
+import logo from '../lib/img/siteforge_mark_128.png';
 
 export default function Landing() {
   return (
     <div className="min-h-screen grid-bg text-text">
       <header className="border-b border-border">
         <div className="max-w-6xl mx-auto px-6 py-5 flex items-center justify-between">
-          <div className="logo">
-           <img src="./lib/img/siteforge_mark_512.png" alt="SiteForge logo" className="h-8 w-auto" />
-          </div>
+          <img src={logo} alt="SiteForge" className="h-8 w-auto" />
           <nav className="flex items-center gap-3">
             <Link to="/login" className="font-mono text-sm uppercase text-muted hover:text-text">Login</Link>
             <Link to="/signup" className="btn-primary">Get Started</Link>
