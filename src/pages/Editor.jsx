@@ -71,10 +71,12 @@ const SELECTION_SCRIPT = `
     const target = nearestSelectable(e.target);
     if (selected && selected !== target) selected.style.boxShadow = '';
     selected = target;
+    target.style.boxShadow = '';
+    const outerHtml = target.outerHTML;
     target.style.boxShadow = SELECT;
     window.parent.postMessage({
       type: 'ELEMENT_SELECTED',
-      outerHtml: target.outerHTML,
+      outerHtml: outerHtml,
       path: cssPath(target),
     }, '*');
   }, true);
