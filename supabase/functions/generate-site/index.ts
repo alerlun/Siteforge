@@ -1,4 +1,5 @@
 // generate-site — single Claude build call (or Edit for follow-up chat messages)
+// Streams an SSE response so mobile carrier proxies don't kill idle connections.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser, PLAN_LIMITS } from '../_shared/auth.ts';
 import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
@@ -39,15 +40,30 @@ async function getCreditRates(supabase: any): Promise<CreditRates> {
   };
 }
 
-interface TokenUsage { input_tokens: number; output_tokens: number; }
+interface SystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: { type: 'ephemeral' };
+}
+
+interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
 
 function computeCredits(usage: TokenUsage, rates: CreditRates): number {
-  return Math.ceil((usage.input_tokens * rates.inRate + usage.output_tokens * rates.outRate) * rates.margin);
+  // Cache writes cost 2× input rate (1h TTL); cache reads cost 0.1× input rate.
+  const uncached   = usage.input_tokens * rates.inRate;
+  const cacheWrite = (usage.cache_creation_input_tokens ?? 0) * rates.inRate * 2;
+  const cacheRead  = (usage.cache_read_input_tokens    ?? 0) * rates.inRate * 0.1;
+  return Math.ceil((uncached + cacheWrite + cacheRead + usage.output_tokens * rates.outRate) * rates.margin);
 }
 
 function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean): number {
   const inputEst  = isEdit ? 15000 : (hasHistory ? 3000 : 1200);
-  const outputEst = isEdit ? 12000 : 8000;
+  const outputEst = isEdit ? 10000 : 8000;
   return computeCredits({ input_tokens: inputEst, output_tokens: outputEst }, rates);
 }
 
@@ -151,21 +167,83 @@ const STYLE_PRESETS = [
     typography: 'Sora or Nunito + Inter. Friendly, approachable, energetic.',
     layout: 'Hero with gradient accent band, icon-free feature blocks (bold numbers/labels), mobile-first flow.',
   },
+  {
+    name: 'Brutalist Editorial',
+    palette: 'Pure white bg (#ffffff), jet black text (#000000), single high-contrast accent (red #e63329 or yellow #f5c400).',
+    typography: 'Anton or Bebas Neue for headlines (weight 900, all-caps) + Barlow body. Extreme type scale contrast.',
+    layout: 'Oversized asymmetric hero with raw grid lines, bold ruled dividers, services as stark numbered list, maximum whitespace.',
+  },
+  {
+    name: 'Soft Luxury Rose',
+    palette: 'Blush bg (#fdf6f0), deep espresso text (#1f1008), rose-gold accent (#c9846a). Warm and feminine but premium.',
+    typography: 'Cormorant Garamond italic display + Lato body. Thin weights, generous tracking.',
+    layout: 'Full-bleed soft hero, circular or organic shapes for imagery placeholders, testimonials in soft-bordered cards, CTA in rose-gold.',
+  },
+  {
+    name: 'Midnight Indigo',
+    palette: 'Deep indigo bg (#0d0d2b), lavender-white text (#ede9f6), vivid violet accent (#7c3aed). Bold and nocturnal.',
+    typography: 'Syne weight 800 display + Inter body. Gradient text on key headline words.',
+    layout: 'Dark hero with subtle radial gradient glow, services in bordered indigo cards, stats section with large glowing numerals.',
+  },
+  {
+    name: 'Coastal Premium',
+    palette: 'Soft ocean blue bg (#eef5f9), near-black text (#0f1f2e), deep teal accent (#0a7ea4). Clean, trustworthy, premium.',
+    typography: 'Libre Baskerville display + Source Sans 3 body. Confident but approachable.',
+    layout: 'Airy full-width hero, trust row with key stats, services in teal-accented grid cards, testimonials in clean quote blocks.',
+  },
+  {
+    name: 'Industrial Loft',
+    palette: 'Warm concrete bg (#e8e4de), dark charcoal text (#1a1714), burnt orange accent (#c0542a). Raw, authentic, bold.',
+    typography: 'Space Grotesk weight 700 + IBM Plex Mono for labels. Industrial feel with tight letter-spacing.',
+    layout: 'Textured hero with thick ruled borders, services as bold grid with left-rule accent bars, footer as dense info block.',
+  },
+  {
+    name: 'Japanese Minimalist',
+    palette: 'Off-white washi bg (#f7f4ef), deep ink text (#1a1a1a), single muted accent (rust #b85c38 or ink blue #2a3d5c).',
+    typography: 'Noto Serif Display + Noto Sans. Generous line-height. Restrained weight.',
+    layout: 'Centered, meditative layout. Hero is text-only, no visual clutter. Wide breathing margins. Services as vertical list with thin rules. No decorative elements.',
+  },
+  {
+    name: 'Forest & Craft',
+    palette: 'Deep forest bg (#1a2e1a), warm cream text (#f2ead8), moss green accent (#4a7c59). Earthy, premium, outdoor.',
+    typography: 'Playfair Display italic + Karla. Crafted warmth.',
+    layout: 'Dark nature-tone hero with cream headline, services as cream-on-dark bordered cards, pull-quote testimonial, warm CTA band.',
+  },
+  {
+    name: 'Swiss Corporate',
+    palette: 'Light gray bg (#f4f4f4), deep gray text (#1c1c1c), single corporate accent (blue #1a56db or red #c81e1e).',
+    typography: 'DM Sans or Inter weight 600 + 400. Precise grid, no decorative type. All labels in uppercase.',
+    layout: 'Structured Swiss-grid hero, info in tight horizontal bands, services as clean bordered table layout, maximum legibility.',
+  },
+  {
+    name: 'Cinema Noir',
+    palette: 'Near-black bg (#0c0c0c), silver-white text (#d4d4d4), warm amber accent (#e8a030). Cinematic and authoritative.',
+    typography: 'Libre Baskerville + DM Mono for labels. Italic accent on hero subheadline.',
+    layout: 'Full-bleed dark hero, horizontal silver rule dividers, services as sparse list, testimonial in centered italic block, amber CTA stands alone.',
+  },
+  {
+    name: 'Pastel Tech',
+    palette: 'Very light lavender bg (#f5f3ff), dark slate text (#1e1b4b), medium purple accent (#6d28d9). Modern SaaS aesthetic.',
+    typography: 'Plus Jakarta Sans weight 700 + 400. Rounded feel, energetic without being aggressive.',
+    layout: 'Gradient hero band (lavender to white), features in three-column icon-free cards with purple top-border, clean FAQ strip, bold CTA.',
+  },
 ] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HTML BUILD — open prompt; the model designs freely, like a direct Claude chat
 // ─────────────────────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(lang: LangInfo): string {
-  const preset = STYLE_PRESETS[Math.floor(Math.random() * STYLE_PRESETS.length)];
+// Static content: all style preset definitions + rules/technical. This block
+// never changes between calls, so it's safe to mark for prompt caching.
+function buildStaticSystemBlock(): string {
+  const catalog = STYLE_PRESETS.map(
+    (p) => `• ${p.name}\n  Colors: ${p.palette}\n  Type: ${p.typography}\n  Layout: ${p.layout}`,
+  ).join('\n\n');
 
   return `You are an award-winning web designer. Build a luxurious, high-converting single-page marketing website for the business described.
 
-STYLE: ${preset.name}
-- Colors: ${preset.palette}
-- Type: ${preset.typography}
-- Layout: ${preset.layout}
+STYLE CATALOG — one preset will be selected per generation:
+${catalog}
 
 RULES:
 - NO emojis anywhere. NO icon libraries (Font Awesome etc.).
@@ -173,12 +251,28 @@ RULES:
 - Section order: hero (bold value prop) → trust/stats → services → testimonial → CTA → footer.
 - Write real, specific marketing copy. Not "We are committed to excellence." Write like a copywriter who studied this business.
 - Fully responsive (320px–1440px). CSS transitions on hover. scroll-behavior: smooth.
-- Language: every visible word in ${lang.name} (${lang.nativeName}). Code excepted.
 
 TECHNICAL:
 - Single self-contained HTML file. All CSS in <style>, minimal JS in <script> before </body>.
 - Google Fonts via <link> only. No other external resources.
 - Output raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no commentary.`;
+}
+
+// Dynamic content: randomly selected style + language. Lives in a second block
+// placed AFTER the cached prefix so the prefix remains an exact match.
+function buildSystemBlocks(lang: LangInfo): [SystemBlock, SystemBlock] {
+  const preset = STYLE_PRESETS[Math.floor(Math.random() * STYLE_PRESETS.length)];
+  return [
+    {
+      type: 'text',
+      text: buildStaticSystemBlock(),
+      cache_control: { type: 'ephemeral' },
+    },
+    {
+      type: 'text',
+      text: `SELECTED STYLE: ${preset.name}\n- Colors: ${preset.palette}\n- Type: ${preset.typography}\n- Layout: ${preset.layout}\n\nLANGUAGE: Write every visible word in ${lang.name} (${lang.nativeName}). Code excepted.`,
+    },
+  ];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,11 +333,13 @@ function extractHtml(text: string): string {
 
 // Anthropic Messages API: system prompt is top-level, messages are user/assistant only.
 // Returns both the text content and the token usage reported by the API.
+// Pass systemBlocks to use prompt caching; otherwise system is extracted from messages[].
 async function callClaude(
   apiKey: string,
   messages: Array<{ role: string; content: string }>,
   temperature = 0.85,
-  maxTokens = 16000,
+  maxTokens = 12000,
+  systemBlocks?: SystemBlock[],
 ): Promise<{ text: string; usage: TokenUsage }> {
   const systemParts: string[] = [];
   const convo: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -256,8 +352,13 @@ async function callClaude(
     max_tokens: maxTokens,
     temperature,
     messages: convo,
+    stream: true,
   };
-  if (systemParts.length) body.system = systemParts.join('\n\n');
+  if (systemBlocks) {
+    body.system = systemBlocks;
+  } else if (systemParts.length) {
+    body.system = systemParts.join('\n\n');
+  }
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -265,27 +366,65 @@ async function callClaude(
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
+      'anthropic-beta': 'prompt-caching-2024-07-31',
     },
     body: JSON.stringify(body),
   });
   if (!res.ok) { const d = await res.text(); throw new Error(`anthropic_error: ${res.status} ${d}`); }
-  const payload = await res.json();
-  const blocks = (payload?.content as Array<{ type: string; text?: string }>) ?? [];
-  const text = blocks.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');
-  const usage: TokenUsage = {
-    input_tokens:  payload?.usage?.input_tokens  ?? 0,
-    output_tokens: payload?.usage?.output_tokens ?? 0,
-  };
-  return { text, usage };
+
+  // Stream the response so the Deno worker receives data continuously — prevents
+  // the 90-second QUIC timeout that fires when awaiting the full non-streaming response.
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let streamBuf = '';
+  let fullText = '';
+  const usage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    streamBuf += dec.decode(value, { stream: true });
+    const lines = streamBuf.split('\n');
+    streamBuf = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+      let ev: Record<string, unknown>;
+      try { ev = JSON.parse(data); } catch { continue; }
+      if (ev.type === 'message_start') {
+        const u = (ev.message as Record<string, unknown>)?.usage as Record<string, number> | undefined;
+        if (u) {
+          usage.input_tokens                = u.input_tokens                ?? 0;
+          usage.cache_creation_input_tokens = u.cache_creation_input_tokens ?? 0;
+          usage.cache_read_input_tokens     = u.cache_read_input_tokens     ?? 0;
+        }
+      } else if (ev.type === 'content_block_delta') {
+        const d = ev.delta as Record<string, unknown> | undefined;
+        if (d?.type === 'text_delta') fullText += (d.text as string) ?? '';
+      } else if (ev.type === 'message_delta') {
+        const u = ev.usage as Record<string, number> | undefined;
+        if (u) usage.output_tokens = u.output_tokens ?? 0;
+      }
+    }
+  }
+
+  if (usage.cache_read_input_tokens || usage.cache_creation_input_tokens) {
+    console.log(
+      `[cache] read=${usage.cache_read_input_tokens} created=${usage.cache_creation_input_tokens} uncached_in=${usage.input_tokens}`,
+    );
+  }
+  return { text: fullText, usage };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HANDLER
+// HANDLER — SSE streaming so mobile proxies don't drop idle connections
 // ─────────────────────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   try {
+    // ── Pre-flight checks (fast; return early JSON errors before streaming) ──
     const user = await getUser(req);
     if (!user) return errorResponse(401, 'Unauthorized');
 
@@ -302,12 +441,12 @@ Deno.serve(async (req) => {
     const supabase = adminClient();
     // Select * so missing columns (e.g. credit_balance before migration) don't crash the query.
     const { data: profile, error: profileErr } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-    if (profileErr || !profile) return new Response(JSON.stringify({ error: 'Profile not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (profileErr || !profile) return errorResponse(404, 'profile_not_found');
 
     const rates = await getCreditRates(supabase);
 
     const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
-    if (!apiKey) return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    if (!apiKey) return errorResponse(500, 'api_key_missing');
 
     const briefLines = [
       businessName ? `Business name: ${businessName}` : null,
@@ -317,15 +456,10 @@ Deno.serve(async (req) => {
     const businessInfoBlock = briefLines.length ? briefLines.join('\n') : `Business context: ${prompt.slice(0, 300)}`;
     const lang = detectLanguage(clientLocation ?? '', businessName ?? '', prompt);
 
-    // Edit-vs-new: if a site already exists in this chat, the AI decides per message.
     const hasExistingSite = typeof currentHtml === 'string'
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
-    let isEditMode = false;
-    const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
 
-    // Pre-flight credit check using a conservative estimate.
-    // Fall back to full monthly allowance when migration hasn't run yet (credit_balance null/undefined).
     const fallbackBalance = profile.plan === 'pro' ? rates.monthlyPro : rates.monthlyFree;
     const estimate = estimateCredits(rates, hasExistingSite, Array.isArray(history) && history.length > 0);
     const currentBalance: number = (profile.credit_balance != null) ? Number(profile.credit_balance) : fallbackBalance;
@@ -336,111 +470,143 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (hasExistingSite) {
-      try {
-        const result = await classifyEditRequest(apiKey, prompt);
-        isEditMode = result.isEdit;
-        totalUsage.input_tokens  += result.usage.input_tokens;
-        totalUsage.output_tokens += result.usage.output_tokens;
-      } catch { isEditMode = false; }
-    }
+    // ── SSE streaming — heartbeat every 10 s keeps mobile proxies alive ──────
+    const enc = new TextEncoder();
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const writer = writable.getWriter();
+    const sse = async (obj: unknown) => {
+      try { await writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch (e) { console.error('[sse] write failed:', e); }
+    };
 
-    let html = '';
-    let retried = false;
-    let edited = false;
+    const hb = setInterval(() => { sse({ type: 'heartbeat' }); }, 10_000);
 
-    if (isEditMode) {
-      // ── EDIT MODE: refine the existing site from a chat instruction ──────────
+    (async () => {
       try {
-        const { text: editRaw, usage: editUsage } = await callClaude(apiKey, [
-          { role: 'system', content: editSystemPrompt(lang) },
-          { role: 'user', content: `CURRENT HTML:\n${currentHtml}\n\nCHANGE REQUEST:\n${prompt}` },
-        ], 0.4, 12000);
-        totalUsage.input_tokens  += editUsage.input_tokens;
-        totalUsage.output_tokens += editUsage.output_tokens;
-        const editedHtml = extractHtml(editRaw);
-        if (editedHtml && /<!DOCTYPE\s+html/i.test(editedHtml) && editedHtml.length > 5000) {
-          html = editedHtml;
-          edited = true;
+        const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+        let isEditMode = false;
+        let html = '';
+        let retried = false;
+        let edited = false;
+
+        // Edit-vs-new: if a site already exists in this chat, the AI decides per message.
+        if (hasExistingSite) {
+          try {
+            const result = await classifyEditRequest(apiKey, prompt);
+            isEditMode = result.isEdit;
+            totalUsage.input_tokens  += result.usage.input_tokens;
+            totalUsage.output_tokens += result.usage.output_tokens;
+          } catch { isEditMode = false; }
+        }
+
+        if (isEditMode) {
+          // ── EDIT MODE: refine the existing site from a chat instruction ────
+          const { text: editRaw, usage: editUsage } = await callClaude(apiKey, [
+            { role: 'system', content: editSystemPrompt(lang) },
+            { role: 'user', content: `CURRENT HTML:\n${currentHtml}\n\nCHANGE REQUEST:\n${prompt}` },
+          ], 0.4, 10000);
+          totalUsage.input_tokens  += editUsage.input_tokens;
+          totalUsage.output_tokens += editUsage.output_tokens;
+          const editedHtml = extractHtml(editRaw);
+          if (editedHtml && /<!DOCTYPE\s+html/i.test(editedHtml) && editedHtml.length > 5000) {
+            html = editedHtml;
+            edited = true;
+          } else {
+            // deno-lint-ignore no-explicit-any
+            const e: any = new Error('edit_failed');
+            e.detail = 'Model returned an incomplete document.';
+            e.status = 502;
+            throw e;
+          }
         } else {
-          return new Response(JSON.stringify({ error: 'edit_failed', detail: 'Model returned an incomplete document.' }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          // ── BUILD: generate the website directly from the business info ────
+          const buildUserMessage = `${businessInfoBlock}\n\n${prompt}`;
+          const sysBlocks = buildSystemBlocks(lang);
+          const buildMessages: Array<{ role: string; content: string }> = [];
+          if (Array.isArray(history)) {
+            for (const m of history) {
+              if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string') buildMessages.push({ role: m.role, content: m.content });
+            }
+          }
+          buildMessages.push({ role: 'user', content: buildUserMessage });
+
+          const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 12000, sysBlocks);
+          totalUsage.input_tokens                  += buildUsage.input_tokens;
+          totalUsage.output_tokens                 += buildUsage.output_tokens;
+          totalUsage.cache_read_input_tokens        = (totalUsage.cache_read_input_tokens    ?? 0) + (buildUsage.cache_read_input_tokens    ?? 0);
+          totalUsage.cache_creation_input_tokens    = (totalUsage.cache_creation_input_tokens ?? 0) + (buildUsage.cache_creation_input_tokens ?? 0);
+          html = extractHtml(raw);
+
+          if (isSkeletalOutput(html)) {
+            retried = true;
+            const retryMessages = [
+              ...buildMessages,
+              { role: 'assistant', content: html },
+              { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
+            ];
+            const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 12000, sysBlocks);
+            totalUsage.input_tokens                += retryUsage.input_tokens;
+            totalUsage.output_tokens               += retryUsage.output_tokens;
+            totalUsage.cache_read_input_tokens      = (totalUsage.cache_read_input_tokens    ?? 0) + (retryUsage.cache_read_input_tokens    ?? 0);
+            totalUsage.cache_creation_input_tokens  = (totalUsage.cache_creation_input_tokens ?? 0) + (retryUsage.cache_creation_input_tokens ?? 0);
+            const retryHtml = extractHtml(retryRaw);
+            if (retryHtml && /<!DOCTYPE\s+html/i.test(retryHtml) && retryHtml.length > 4000) html = retryHtml;
+          }
         }
+
+        // ── Session ──────────────────────────────────────────────────────────
+        let resolvedSessionId: string | null = null;
+        if (sessionId) {
+          const { data: ex } = await supabase.from('chat_sessions').select('id').eq('id', sessionId).eq('user_id', user.id).maybeSingle();
+          if (ex) resolvedSessionId = ex.id;
+        }
+        if (!resolvedSessionId && leadId) {
+          const { data: ex } = await supabase.from('chat_sessions').select('id').eq('lead_id', leadId).eq('user_id', user.id).maybeSingle();
+          if (ex) resolvedSessionId = ex.id;
+        }
+        if (!resolvedSessionId) {
+          const title = (businessName ?? prompt).toString().slice(0, 60);
+          const { data: created } = await supabase.from('chat_sessions').insert({ user_id: user.id, title, lead_id: leadId ?? null }).select('id').single();
+          resolvedSessionId = created?.id ?? null;
+        } else {
+          await supabase.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', resolvedSessionId);
+        }
+
+        const { data: site, error: siteErr } = await supabase.from('generated_sites').insert({
+          user_id: user.id, session_id: resolvedSessionId,
+          business_name: businessName ?? null, business_type: businessType ?? null,
+          client_location: clientLocation ?? null, html_output: html, status: 'pending',
+        }).select().single();
+        if (siteErr) throw new Error(siteErr.message);
+
+        // Increment the legacy counter (kept for stats) and deduct credits.
+        await supabase.from('profiles').update({ generations_used: (profile.generations_used ?? 0) + 1 }).eq('id', user.id);
+        const actionType = isEditMode ? 'edit' : 'generation';
+        await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
+        const creditsUsed = Number(computeCredits(totalUsage, rates));
+
+        console.log('[generate-site] sending result, html_len:', html.length, 'credits:', creditsUsed);
+        await sse({ type: 'result', site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang, creditsUsed });
+        console.log('[generate-site] result sent');
       } catch (err) {
-        return new Response(JSON.stringify({ error: 'anthropic_error', detail: err instanceof Error ? err.message : String(err) }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[generate-site] IIFE error:', msg);
+        // deno-lint-ignore no-explicit-any
+        const e = err as any;
+        await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
+      } finally {
+        clearInterval(hb);
+        try { await writer.close(); } catch { /* already closed */ }
       }
-    } else {
-      // ── BUILD: generate the website directly from the business info ─────────
-      const buildUserMessage = `${businessInfoBlock}
+    })();
 
-${prompt}`;
-
-      const buildMessages: Array<{ role: string; content: string }> = [{ role: 'system', content: buildSystemPrompt(lang) }];
-      if (Array.isArray(history)) {
-        for (const m of history) {
-          if (m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string') buildMessages.push({ role: m.role, content: m.content });
-        }
-      }
-      buildMessages.push({ role: 'user', content: buildUserMessage });
-
-      try {
-        const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 16000);
-        totalUsage.input_tokens  += buildUsage.input_tokens;
-        totalUsage.output_tokens += buildUsage.output_tokens;
-        html = extractHtml(raw);
-
-        if (isSkeletalOutput(html)) {
-          retried = true;
-          const retryMessages = [
-            ...buildMessages,
-            { role: 'assistant', content: html },
-            { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
-          ];
-          const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 16000);
-          totalUsage.input_tokens  += retryUsage.input_tokens;
-          totalUsage.output_tokens += retryUsage.output_tokens;
-          const retryHtml = extractHtml(retryRaw);
-          if (retryHtml && /<!DOCTYPE\s+html/i.test(retryHtml) && retryHtml.length > 4000) html = retryHtml;
-        }
-      } catch (err) {
-        return new Response(JSON.stringify({ error: 'anthropic_error', detail: err instanceof Error ? err.message : String(err) }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-      }
-    }
-
-    // ── Session ───────────────────────────────────────────────────────────────
-    let resolvedSessionId: string | null = null;
-    if (sessionId) {
-      const { data: ex } = await supabase.from('chat_sessions').select('id').eq('id', sessionId).eq('user_id', user.id).maybeSingle();
-      if (ex) resolvedSessionId = ex.id;
-    }
-    if (!resolvedSessionId && leadId) {
-      const { data: ex } = await supabase.from('chat_sessions').select('id').eq('lead_id', leadId).eq('user_id', user.id).maybeSingle();
-      if (ex) resolvedSessionId = ex.id;
-    }
-    if (!resolvedSessionId) {
-      const title = (businessName ?? prompt).toString().slice(0, 60);
-      const { data: created } = await supabase.from('chat_sessions').insert({ user_id: user.id, title, lead_id: leadId ?? null }).select('id').single();
-      resolvedSessionId = created?.id ?? null;
-    } else {
-      await supabase.from('chat_sessions').update({ updated_at: new Date().toISOString() }).eq('id', resolvedSessionId);
-    }
-
-    const { data: site, error: siteErr } = await supabase.from('generated_sites').insert({
-      user_id: user.id, session_id: resolvedSessionId,
-      business_name: businessName ?? null, business_type: businessType ?? null,
-      client_location: clientLocation ?? null, html_output: html, status: 'pending',
-    }).select().single();
-    if (siteErr) return new Response(JSON.stringify({ error: siteErr.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
-    // Increment the legacy counter (kept for stats) and deduct credits.
-    await supabase.from('profiles').update({ generations_used: (profile.generations_used ?? 0) + 1 }).eq('id', user.id);
-    const actionType = isEditMode ? 'edit' : 'generation';
-    await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
-
-    // Return actual credits used so the client can update its display.
-    const creditsUsed = Number(computeCredits(totalUsage, rates));
-
-    return new Response(JSON.stringify({ site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang, creditsUsed }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-
+    return new Response(readable, {
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+      },
+    });
   } catch (err) {
     return fromHttpError(err);
   }
