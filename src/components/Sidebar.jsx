@@ -37,7 +37,7 @@ export default function Sidebar() {
           <Link to="/privacy" className="hover:text-text">Privacy</Link>
           <Link to="/terms" className="hover:text-text">Terms</Link>
         </div>
-        <div>v0.1.0</div>
+        <div>v1.0.0</div>
       </div>
     </aside>
   );
