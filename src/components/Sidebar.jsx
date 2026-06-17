@@ -10,20 +10,48 @@ const NAV = [
 
 export default function Sidebar() {
   return (
-    <aside className="w-48 shrink-0 border-r border-border bg-surface flex flex-col">
-      <div className="px-4 py-5 border-b border-border">
-        <img src={logo} alt="SiteForge" className="h-7 w-auto" />
-      </div>
-      <nav className="flex-1 py-3">
+    <>
+      {/* Desktop sidebar */}
+      <aside className="hidden md:flex w-48 shrink-0 border-r border-border bg-surface flex-col">
+        <div className="px-4 py-5 border-b border-border">
+          <img src={logo} alt="SiteForge" className="h-7 w-auto" />
+        </div>
+        <nav className="flex-1 py-3">
+          {NAV.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-4 py-2.5 font-mono uppercase tracking-wider text-xs border-l-2 ${
+                  isActive
+                    ? 'border-accent text-accent bg-bg'
+                    : 'border-transparent text-muted hover:text-text'
+                }`
+              }
+            >
+              <item.icon />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <div className="px-4 py-3 border-t border-border font-mono text-[10px] text-muted space-y-2">
+          <div className="flex gap-3">
+            <Link to="/privacy" className="hover:text-text">Privacy</Link>
+            <Link to="/terms" className="hover:text-text">Terms</Link>
+          </div>
+          <div>v1.0.1</div>
+        </div>
+      </aside>
+
+      {/* Mobile bottom nav */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-50 bg-surface border-t border-border flex">
         {NAV.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-4 py-2.5 font-mono uppercase tracking-wider text-xs border-l-2 ${
-                isActive
-                  ? 'border-accent text-accent bg-bg'
-                  : 'border-transparent text-muted hover:text-text'
+              `flex-1 flex flex-col items-center justify-center gap-1 py-2.5 font-mono text-[10px] uppercase tracking-wider transition-colors ${
+                isActive ? 'text-accent' : 'text-muted'
               }`
             }
           >
@@ -32,14 +60,7 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="px-4 py-3 border-t border-border font-mono text-[10px] text-muted space-y-2">
-        <div className="flex gap-3">
-          <Link to="/privacy" className="hover:text-text">Privacy</Link>
-          <Link to="/terms" className="hover:text-text">Terms</Link>
-        </div>
-        <div>v1.0.0</div>
-      </div>
-    </aside>
+    </>
   );
 }
 
