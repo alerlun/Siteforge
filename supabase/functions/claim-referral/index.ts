@@ -56,26 +56,23 @@ Deno.serve(async (req) => {
   const isDuplicateIp = ip !== 'unknown' && referrerIp !== null && ip === referrerIp;
 
   if (isDuplicateIp) {
-    await supabase.from('referral_activations').insert({
+    const { error: dupErr } = await supabase.from('referral_activations').insert({
       referrer_id: referrer.id,
       referred_id: user.id,
       status: 'rejected',
       reject_reason: 'duplicate_ip',
       signup_ip: ip,
-    }).then(null, () => {}); // ignore unique violation
+    });
+    if (dupErr && dupErr.code !== '23505') {
+      console.error('[claim-referral] duplicate_ip log failed:', dupErr.message);
+    }
     return new Response(
       JSON.stringify({ ok: true, skipped: 'duplicate_ip' }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 
-  // Set referred_by on profile and store signup_ip.
-  await supabase
-    .from('profiles')
-    .update({ referred_by: referrer.id, signup_ip: ip !== 'unknown' ? ip : null })
-    .eq('id', user.id);
-
-  // Insert activation row (unique constraint on referred_id makes this idempotent).
+  // Insert activation row first (idempotent via unique constraint on referred_id).
   const { error: insertErr } = await supabase.from('referral_activations').insert({
     referrer_id: referrer.id,
     referred_id: user.id,
@@ -85,6 +82,12 @@ Deno.serve(async (req) => {
   if (insertErr && insertErr.code !== '23505') {
     return errorResponse(500, 'insert_failed');
   }
+
+  // Set referred_by on profile after activation row is safely inserted.
+  await supabase
+    .from('profiles')
+    .update({ referred_by: referrer.id, signup_ip: ip !== 'unknown' ? ip : null })
+    .eq('id', user.id);
 
   return new Response(
     JSON.stringify({ ok: true }),
