@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../lib/auth.jsx';
+import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
 import { downloadHtml } from '../lib/utils.js';
 import { estimateCredits, formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
 import SaleModal from '../components/SaleModal.jsx';
 import SessionsPanel from '../components/SessionsPanel.jsx';
+
+function useMobile() {
+  const [mobile, setMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const fn = () => setMobile(window.innerWidth < 768);
+    window.addEventListener('resize', fn);
+    return () => window.removeEventListener('resize', fn);
+  }, []);
+  return mobile;
+}
 
 export default function Chat() {
   const { user, profile, refreshProfile } = useAuth();
@@ -15,6 +25,9 @@ export default function Chat() {
   const initialPrompt = location.state?.prompt ?? '';
   const initialMeta = location.state?.meta ?? null;
   const initialLeadId = location.state?.leadId ?? null;
+
+  const isMobile = useMobile();
+  const [mobileTab, setMobileTab] = useState('chat');
 
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -31,15 +44,17 @@ export default function Chat() {
   const [limitHit, setLimitHit] = useState(false);
   const [error, setError] = useState('');
   const [saleOpen, setSaleOpen] = useState(false);
+  const [referralNudge, setReferralNudge] = useState(false);
   const [sidebarW, setSidebarW] = useState(224);
   const [genW, setGenW] = useState(620);
   const threadRef = useRef(null);
 
   const creditBalance = profile?.credit_balance ?? 0;
-  const monthlyAllowance = MONTHLY_ALLOWANCE[profile?.plan === 'pro' ? 'pro' : 'free'];
+  const isPro = isProUser(profile);
+  const monthlyAllowance = MONTHLY_ALLOWANCE[isPro ? 'pro' : 'free'];
   const genEstimate = estimateCredits(html ? 'edit' : 'generation');
   const canGenerate = creditBalance >= genEstimate;
-  const planLabel = profile?.plan === 'pro' ? '[PRO]' : '[FREE]';
+  const planLabel = isPro ? '[PRO]' : '[FREE]';
 
   // Load sessions on mount.
   const loadSessions = useCallback(async () => {
@@ -228,6 +243,12 @@ export default function Chat() {
       ]);
       await refreshProfile();
       loadSessions();
+
+      // Show referral nudge once per session after first generation.
+      setReferralNudge(true);
+
+      // On mobile, jump to preview after generation completes.
+      if (isMobile) setMobileTab('preview');
     } catch (err) {
       if (err.status === 402) {
         setLimitHit(true);
@@ -253,37 +274,70 @@ export default function Chat() {
   }
 
   return (
-    <div className="flex h-screen">
-      <SessionsPanel
-        sessions={sessions}
-        activeId={activeSessionId}
-        loading={sessionsLoading}
-        onSelect={selectSession}
-        onNew={newSession}
-        onDelete={deleteSession}
-        width={sidebarW}
-      />
-      <Divider onDrag={(dx) => setSidebarW((w) => clamp(w + dx, 160, 420))} />
+    <div className="flex h-[calc(100vh-3.5rem)] md:h-screen">
+      {/* Sessions panel: desktop only */}
+      {!isMobile && (
+        <>
+          <SessionsPanel
+            sessions={sessions}
+            activeId={activeSessionId}
+            loading={sessionsLoading}
+            onSelect={selectSession}
+            onNew={newSession}
+            onDelete={deleteSession}
+            width={sidebarW}
+          />
+          <Divider onDrag={(dx) => setSidebarW((w) => clamp(w + dx, 160, 420))} />
+        </>
+      )}
+
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
-          <div className="font-mono uppercase tracking-widest text-xs text-muted">
-            generator
-          </div>
-          <div className="flex items-center gap-3">
+        <header className="border-b border-border h-14 px-4 flex items-center justify-between shrink-0 gap-3">
+          {/* Desktop: label. Mobile: tab toggle */}
+          {isMobile ? (
+            <div className="flex border border-border" style={{ borderRadius: 2 }}>
+              <button
+                onClick={() => setMobileTab('chat')}
+                className={`font-mono text-xs uppercase tracking-wider px-3 py-1.5 transition-colors ${
+                  mobileTab === 'chat' ? 'bg-accent text-black' : 'text-muted'
+                }`}
+              >
+                Chat
+              </button>
+              <button
+                onClick={() => setMobileTab('preview')}
+                className={`font-mono text-xs uppercase tracking-wider px-3 py-1.5 transition-colors border-l border-border ${
+                  mobileTab === 'preview' ? 'bg-accent text-black' : 'text-muted'
+                }`}
+              >
+                Preview
+              </button>
+            </div>
+          ) : (
+            <div className="font-mono uppercase tracking-widest text-xs text-muted">generator</div>
+          )}
+
+          <div className="flex items-center gap-3 shrink-0">
             <span className="badge border-border text-text">{planLabel}</span>
             <button
               className="font-mono text-xs uppercase tracking-wider text-muted hover:text-accent"
               onClick={() => navigate('/app/settings')}
               title={`${formatCredits(creditBalance)} / ${formatCredits(monthlyAllowance)} credits remaining`}
             >
-              Credits: {formatCredits(creditBalance)}
+              {isMobile ? formatCredits(creditBalance) : `Credits: ${formatCredits(creditBalance)}`}
             </button>
           </div>
         </header>
 
         <div className="flex-1 min-h-0 flex">
-          <section className="flex flex-col min-h-0 shrink-0" style={{ width: genW }}>
-            <div ref={threadRef} className="flex-1 overflow-y-auto px-6 py-6 space-y-4">
+          {/* ── Chat panel ── */}
+          <section
+            className={`flex flex-col min-h-0 ${isMobile ? 'flex-1' : 'shrink-0'} ${
+              isMobile && mobileTab !== 'chat' ? 'hidden' : ''
+            }`}
+            style={isMobile ? {} : { width: genW }}
+          >
+            <div ref={threadRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
               {messages.length === 0 && !busy && <EmptyState />}
               {messages.map((m, i) => (
                 <Message key={i} role={m.role} content={m.content} />
@@ -292,11 +346,20 @@ export default function Chat() {
               {limitHit && (
                 <div className="card border-accent p-4 font-mono text-sm">
                   Not enough credits. Balance: {formatCredits(creditBalance)}.{' '}
-                  {profile?.plan !== 'pro' && 'Upgrade to Pro for 10× more credits per month.'}
+                  {!isPro && 'Upgrade to Pro for 10× more credits per month.'}
                   <div className="mt-3 flex gap-2">
                     <Link to="/app/settings" className="btn-primary">
-                      {profile?.plan === 'pro' ? 'View Usage' : 'Upgrade'}
+                      {isPro ? 'View Usage' : 'Upgrade'}
                     </Link>
+                  </div>
+                </div>
+              )}
+              {referralNudge && !isPro && (
+                <div className="card border-border p-4 font-mono text-sm flex items-start justify-between gap-4">
+                  <span className="text-muted">Share your link — get Pro free when 5 friends join.</span>
+                  <div className="flex gap-2 shrink-0">
+                    <Link to="/app/settings" className="btn text-xs">Share</Link>
+                    <button className="font-mono text-xs text-muted hover:text-accent" onClick={() => setReferralNudge(false)}>✕</button>
                   </div>
                 </div>
               )}
@@ -306,13 +369,13 @@ export default function Chat() {
                 </div>
               )}
             </div>
-            <form onSubmit={onSubmit} className="border-t border-border p-4 flex gap-3">
+            <form onSubmit={onSubmit} className="border-t border-border p-3 flex gap-2">
               <textarea
-                className="input font-mono resize-none"
+                className="input font-mono resize-none flex-1"
                 rows={3}
                 placeholder={
                   html
-                    ? 'Tell it what to change — "make the header bigger", "fix the contact form", or describe a new site…'
+                    ? 'Tell it what to change…'
                     : 'Paste business info — name, address, phone, hours, what they do…'
                 }
                 value={input}
@@ -322,39 +385,48 @@ export default function Chat() {
                 }}
                 disabled={busy}
               />
-              <button className="btn-primary self-end" disabled={busy || !input.trim()}>
+              <button className="btn-primary self-end whitespace-nowrap" disabled={busy || !input.trim()}>
                 {busy ? '…' : 'Generate'}
               </button>
             </form>
           </section>
 
-          <Divider
-            onDrag={(dx) =>
-              setGenW((w) => clamp(w + dx, 320, window.innerWidth - 480))
-            }
-          />
+          {!isMobile && (
+            <Divider
+              onDrag={(dx) =>
+                setGenW((w) => clamp(w + dx, 320, window.innerWidth - 480))
+              }
+            />
+          )}
 
-          <section className="flex flex-col min-h-0 flex-1 min-w-0">
-            <div className="px-5 h-12 border-b border-border flex items-center justify-between">
+          {/* ── Preview panel ── */}
+          <section
+            className={`flex flex-col min-h-0 flex-1 min-w-0 ${
+              isMobile && mobileTab !== 'preview' ? 'hidden' : ''
+            }`}
+          >
+            <div className="px-4 py-2 min-h-[3rem] border-b border-border flex items-center justify-between shrink-0 flex-wrap gap-y-1">
               <div className="font-mono uppercase tracking-widest text-xs text-muted">preview</div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 flex-wrap justify-end">
                 <button
-                  className="btn"
+                  className="btn text-xs px-2 py-1"
                   disabled={!latestSite}
                   onClick={() => setSaleOpen(true)}
                 >
                   Mark Sold
                 </button>
                 <button
-                  className="btn"
+                  className="btn text-xs px-2 py-1"
                   disabled={!latestSite}
                   onClick={() => navigate(`/app/editor/${latestSite.id}`)}
                 >
                   Customize
                 </button>
-                <button className="btn" disabled={!html} onClick={openFullscreen}>Fullscreen</button>
+                <button className="btn text-xs px-2 py-1" disabled={!html} onClick={openFullscreen}>
+                  Fullscreen
+                </button>
                 <button
-                  className="btn"
+                  className="btn text-xs px-2 py-1"
                   disabled={!html}
                   onClick={() => downloadHtml(businessForFile, html)}
                 >
@@ -428,7 +500,7 @@ function Message({ role, content }) {
   const isUser = role === 'user';
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[80%] card p-3 font-mono text-sm whitespace-pre-wrap ${isUser ? 'border-accent' : ''}`}>
+      <div className={`max-w-[85%] card p-3 font-mono text-sm whitespace-pre-wrap ${isUser ? 'border-accent' : ''}`}>
         <div className={`label mb-1 ${isUser ? 'text-accent' : ''}`}>{isUser ? 'you' : 'siteforge'}</div>
         <div>{content}</div>
       </div>
@@ -457,14 +529,13 @@ function Dot({ delay }) {
 
 function EmptyState() {
   return (
-    <div className="card p-6 font-mono text-sm text-muted">
+    <div className="card p-5 font-mono text-sm text-muted">
       <div className="label mb-3">how to start</div>
       Paste a business description into the input below. Example:
-      <div className="mt-3 p-3 border border-border bg-bg text-text whitespace-pre-wrap">
-{`Create a website for this local coffee shop:
-Blue Leaf Coffee, 123 Main St, known for specialty
-lattes and cozy atmosphere, open Mon–Sat 7am–8pm,
-phone 555-1234`}
+      <div className="mt-3 p-3 border border-border bg-bg text-text whitespace-pre-wrap text-xs">
+{`Blue Leaf Coffee, 123 Main St
+Specialty lattes, cozy atmosphere
+Mon–Sat 7am–8pm, phone 555-1234`}
       </div>
     </div>
   );
