@@ -5,10 +5,12 @@ import { adminClient, getUser, PLAN_LIMITS } from '../_shared/auth.ts';
 import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
 import { generateSiteSchema } from '../_shared/validation.ts';
 import { enforce } from '../_shared/ratelimit.ts';
+import { checkReferralActivation } from '../_shared/referral.ts';
 
 const MAX_BODY_BYTES = 640 * 1024; // currentHtml can be large in edit mode
 
 const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-6';
+const CLASSIFY_MODEL = Deno.env.get('ANTHROPIC_CLASSIFY_MODEL') ?? 'claude-haiku-4-5-20251001';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -254,6 +256,8 @@ RULES:
 
 TECHNICAL:
 - Single self-contained HTML file. All CSS in <style>, minimal JS in <script> before </body>.
+- MUST include <meta name="viewport" content="width=device-width, initial-scale=1"> in <head>.
+- Mobile-first CSS: all layouts default to single-column, widen at min-width breakpoints (600px, 900px).
 - Google Fonts via <link> only. No other external resources.
 - Output raw HTML starting with <!DOCTYPE html>. No markdown, no fences, no commentary.`;
 }
@@ -303,7 +307,7 @@ async function classifyEditRequest(apiKey: string, prompt: string): Promise<{ is
         'You classify one message from a user who already has a website generated and visible on screen. Reply with EXACTLY one word and nothing else: "EDIT" if the message asks to change, fix, adjust, tweak, restyle, add to, remove from, or refine the current website; "NEW" if it asks to build a completely different website for a different business.',
     },
     { role: 'user', content: prompt },
-  ], 0, 8);
+  ], 0, 8, undefined, CLASSIFY_MODEL);
   return { isEdit: /edit/i.test(text), usage };
 }
 
@@ -340,6 +344,7 @@ async function callClaude(
   temperature = 0.85,
   maxTokens = 12000,
   systemBlocks?: SystemBlock[],
+  model = MODEL,
 ): Promise<{ text: string; usage: TokenUsage }> {
   const systemParts: string[] = [];
   const convo: Array<{ role: 'user' | 'assistant'; content: string }> = [];
@@ -348,7 +353,7 @@ async function callClaude(
     else if (m.role === 'user' || m.role === 'assistant') convo.push({ role: m.role, content: m.content });
   }
   const body: Record<string, unknown> = {
-    model: MODEL,
+    model,
     max_tokens: maxTokens,
     temperature,
     messages: convo,
@@ -478,7 +483,7 @@ Deno.serve(async (req) => {
       try { await writer.write(enc.encode(`data: ${JSON.stringify(obj)}\n\n`)); } catch (e) { console.error('[sse] write failed:', e); }
     };
 
-    const hb = setInterval(() => { sse({ type: 'heartbeat' }); }, 10_000);
+    const hb = setInterval(() => { sse({ type: 'heartbeat' }); }, 5_000);
 
     (async () => {
       try {
@@ -584,8 +589,12 @@ Deno.serve(async (req) => {
         await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
         const creditsUsed = Number(computeCredits(totalUsage, rates));
 
+        // Fire-and-forget referral check — never block the SSE result.
+        checkReferralActivation(supabase, user.id).catch(() => {});
+
         console.log('[generate-site] sending result, html_len:', html.length, 'credits:', creditsUsed);
-        await sse({ type: 'result', site, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang, creditsUsed });
+        const { html_output: _dropped, ...siteForClient } = site;
+        await sse({ type: 'result', site: siteForClient, html, sessionId: resolvedSessionId, retried, edited, detectedLanguage: lang, creditsUsed });
         console.log('[generate-site] result sent');
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
