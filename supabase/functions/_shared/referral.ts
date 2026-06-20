@@ -45,11 +45,6 @@ export async function confirmReferral(
   activationId: string,
   referrerId: string,
 ): Promise<void> {
-  await supabase
-    .from('referral_activations')
-    .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
-    .eq('id', activationId);
-
   const { data: profile } = await supabase
     .from('profiles')
     .select('referral_count, referral_milestone, pro_until')
@@ -57,6 +52,11 @@ export async function confirmReferral(
     .single();
 
   if (!profile) return;
+
+  await supabase
+    .from('referral_activations')
+    .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
+    .eq('id', activationId);
 
   const newCount = (profile.referral_count ?? 0) + 1;
   const lastMilestone = profile.referral_milestone ?? 0;
