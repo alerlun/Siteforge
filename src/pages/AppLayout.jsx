@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from '../components/Sidebar.jsx';
 import { useAuth } from '../lib/auth.jsx';
-import { getPendingReferral, claimReferral } from '../lib/referral.js';
+import { getPendingReferral, claimReferral, clearPendingReferral } from '../lib/referral.js';
 
 export default function AppLayout() {
   const { profile } = useAuth();
@@ -11,7 +11,7 @@ export default function AppLayout() {
     if (!profile) return;
     if (profile.referred_by) {
       // Already attributed — clear stale localStorage entry if present.
-      import('../lib/referral.js').then(({ clearPendingReferral }) => clearPendingReferral());
+      clearPendingReferral();
       return;
     }
     const code = getPendingReferral();
