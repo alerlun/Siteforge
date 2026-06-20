@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
 import { nextResetDate, formatDate } from '../lib/utils.js';
 import { formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
-import { getReferralStats } from '../lib/referral.js';
+import { getReferralStats, generateReferralCode } from '../lib/referral.js';
 
 export default function Settings() {
   const { user, profile, refreshProfile, signOut } = useAuth();
@@ -39,6 +39,7 @@ export default function Settings() {
   const [referral, setReferral] = useState(null);
   const [referralLoading, setReferralLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -93,6 +94,19 @@ export default function Settings() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  }
+
+  async function generateCode() {
+    setGenerating(true);
+    try {
+      await generateReferralCode();
+      const data = await getReferralStats();
+      setReferral(data);
+    } catch {
+      // silently ignore — user can retry
+    } finally {
+      setGenerating(false);
+    }
   }
 
   async function changePassword() {
@@ -193,20 +207,29 @@ export default function Settings() {
                   Pro active until {formatDate(referral.pro_until)} — earned via referrals
                 </div>
               )}
-              <div>
-                <div className="label mb-2">your referral link</div>
-                <div className="flex gap-2">
-                  <input
-                    readOnly
-                    className="input font-mono text-xs flex-1 min-w-0"
-                    value={referral.link}
-                    onFocus={(e) => e.target.select()}
-                  />
-                  <button className="btn shrink-0" onClick={copyLink}>
-                    {copied ? 'Copied!' : 'Copy'}
+              {!referral.code ? (
+                <div className="flex items-center justify-between gap-4">
+                  <div className="font-mono text-xs text-muted">No referral code yet.</div>
+                  <button className="btn shrink-0" disabled={generating} onClick={generateCode}>
+                    {generating ? 'Generating…' : 'Generate Referral Code'}
                   </button>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <div className="label mb-2">your referral link</div>
+                  <div className="flex gap-2">
+                    <input
+                      readOnly
+                      className="input font-mono text-xs flex-1 min-w-0"
+                      value={referral.link}
+                      onFocus={(e) => e.target.select()}
+                    />
+                    <button className="btn shrink-0" onClick={copyLink}>
+                      {copied ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
               <div>
                 <div className="label mb-2">progress to next free Pro month</div>
                 <div className="border border-border p-3">

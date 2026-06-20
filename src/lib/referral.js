@@ -34,3 +34,7 @@ export async function claimReferral(code) {
 export async function getReferralStats() {
   return callFunction('referral-stats', {});
 }
+
+export async function generateReferralCode() {
+  return callFunction('generate-referral-code', {});
+}
