@@ -451,7 +451,9 @@ begin
 
   insert into public.profiles (id, email, credit_balance, referral_code)
   values (new.id, new.email, coalesce(v_free, 68000), v_code)
-  on conflict (id) do nothing;
+  on conflict (id) do update
+    set referral_code = excluded.referral_code
+    where profiles.referral_code is null;
 
   -- Handle referral code passed via signUp metadata (email signup path).
   v_referral_code := new.raw_user_meta_data->>'referral_code';
@@ -465,11 +467,12 @@ begin
       insert into public.referral_activations (referrer_id, referred_id)
       values (v_referrer_id, new.id)
       on conflict (referred_id) do nothing;
-    else
-      -- Self-referral or unknown code: log as rejected.
+    elsif v_referrer_id = new.id then
+      -- Self-referral: log as rejected.
       insert into public.referral_activations (referrer_id, referred_id, status, reject_reason)
-      values (coalesce(v_referrer_id, new.id), new.id, 'rejected', 'self_referral')
+      values (new.id, new.id, 'rejected', 'self_referral')
       on conflict (referred_id) do nothing;
+    -- else: unknown code — no row inserted, silently ignore
     end if;
   end if;
 
@@ -537,8 +540,9 @@ $$;
 do $$
 begin
   if exists (select 1 from pg_extension where extname = 'pg_cron') then
-    perform cron.unschedule('siteforge_process_referrals')
-      where exists (select 1 from cron.job where jobname = 'siteforge_process_referrals');
+    if exists (select 1 from cron.job where jobname = 'siteforge_process_referrals') then
+      perform cron.unschedule('siteforge_process_referrals');
+    end if;
     perform cron.schedule(
       'siteforge_process_referrals',
       '0 * * * *',
