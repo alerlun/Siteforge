@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useAuth } from '../lib/auth.jsx';
+import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
 import { nextResetDate, formatDate } from '../lib/utils.js';
 import { formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
+import { getReferralStats } from '../lib/referral.js';
 
 export default function Settings() {
   const { user, profile, refreshProfile, signOut } = useAuth();
@@ -25,7 +26,7 @@ export default function Settings() {
     }
   }, [upgraded, refreshProfile, setParams]);
 
-  const isPro = profile?.plan === 'pro';
+  const isPro = isProUser(profile);
   const planLabel = isPro ? 'PRO PLAN' : 'FREE PLAN';
   const leadsLimit = isPro ? 100 : 10;
   const leadsUsed = profile?.leads_used ?? 0;
@@ -34,6 +35,10 @@ export default function Settings() {
 
   const [ledger, setLedger] = useState([]);
   const [ledgerLoading, setLedgerLoading] = useState(true);
+
+  const [referral, setReferral] = useState(null);
+  const [referralLoading, setReferralLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -45,6 +50,16 @@ export default function Settings() {
         .limit(20);
       if (active) { setLedger(data ?? []); setLedgerLoading(false); }
     })();
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    getReferralStats().then((data) => {
+      if (active) { setReferral(data); setReferralLoading(false); }
+    }).catch(() => {
+      if (active) setReferralLoading(false);
+    });
     return () => { active = false; };
   }, []);
 
@@ -72,6 +87,14 @@ export default function Settings() {
     }
   }
 
+  function copyLink() {
+    if (!referral?.link) return;
+    navigator.clipboard.writeText(referral.link).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }
+
   async function changePassword() {
     if (!user?.email) return;
     setBusy(true);
@@ -91,7 +114,7 @@ export default function Settings() {
         <div className="font-mono uppercase tracking-widest text-xs text-muted">settings</div>
       </header>
 
-      <div className="flex-1 overflow-auto px-5 py-5 space-y-5 max-w-3xl">
+      <div className="flex-1 overflow-auto px-5 py-5 space-y-5 max-w-3xl pb-14 md:pb-5">
         {info && <div className="card border-accent p-3 font-mono text-xs">{info}</div>}
         {err && <div className="card border-accent p-3 font-mono text-xs text-accent">{err}</div>}
 
@@ -130,6 +153,7 @@ export default function Settings() {
           ) : ledger.length === 0 ? (
             <div className="p-4 font-mono text-xs text-muted">no usage yet.</div>
           ) : (
+            <div className="overflow-x-auto">
             <table className="data">
               <thead>
                 <tr>
@@ -152,17 +176,103 @@ export default function Settings() {
                 ))}
               </tbody>
             </table>
+            </div>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="px-5 py-4 border-b border-border label">referral</div>
+          {referralLoading ? (
+            <div className="p-4 font-mono text-xs text-muted">loading…</div>
+          ) : !referral ? (
+            <div className="p-4 font-mono text-xs text-muted">unavailable</div>
+          ) : (
+            <div className="p-5 space-y-4">
+              {referral.pro_until && new Date(referral.pro_until) > new Date() && (
+                <div className="font-mono text-xs text-accent border border-accent/30 rounded px-3 py-2">
+                  Pro active until {formatDate(referral.pro_until)} — earned via referrals
+                </div>
+              )}
+              <div>
+                <div className="label mb-2">your referral link</div>
+                <div className="flex gap-2">
+                  <input
+                    readOnly
+                    className="input font-mono text-xs flex-1 min-w-0"
+                    value={referral.link}
+                    onFocus={(e) => e.target.select()}
+                  />
+                  <button className="btn shrink-0" onClick={copyLink}>
+                    {copied ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="label mb-2">progress to next free Pro month</div>
+                <div className="border border-border p-3">
+                  <div className="flex items-center justify-between font-mono text-xs mb-2">
+                    <span className="text-muted">REFERRALS</span>
+                    <span>{referral.progressToNext}/5</span>
+                  </div>
+                  <div className="h-1.5 bg-bg border border-border">
+                    <div
+                      className="h-full bg-accent"
+                      style={{ width: `${Math.min(100, (referral.progressToNext / 5) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 font-mono text-xs text-muted">
+                    {referral.count} confirmed referral{referral.count !== 1 ? 's' : ''} total
+                  </div>
+                </div>
+              </div>
+              {referral.activations?.length > 0 && (
+                <div>
+                  <div className="label mb-2">recent referrals</div>
+                  <div className="space-y-1">
+                    {referral.activations.slice(0, 5).map((a, i) => (
+                      <div key={i} className="flex items-center justify-between font-mono text-xs border border-border px-3 py-2">
+                        <span className="text-muted">{formatDate(a.created_at)}</span>
+                        <span className={a.status === 'confirmed' ? 'text-accent' : 'text-muted'}>
+                          {a.status === 'confirmed' ? 'confirmed' : 'pending'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="border-t border-border pt-4">
+                <div className="label mb-2">share</div>
+                <div className="flex gap-2">
+                  <a
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(`I'm using SiteForge to build AI-powered websites for local businesses. Join me: ${referral.link}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn font-mono text-xs"
+                  >
+                    Twitter / X
+                  </a>
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(`Check out SiteForge — AI-generated websites for local businesses. Sign up here: ${referral.link}`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn font-mono text-xs"
+                  >
+                    WhatsApp
+                  </a>
+                </div>
+              </div>
+            </div>
           )}
         </div>
 
         <div className="card p-5 space-y-3">
           <div className="label">account</div>
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="font-mono text-sm">{user?.email}</div>
-              <div className="font-mono text-xs text-muted mt-1">user id: {user?.id}</div>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="min-w-0">
+              <div className="font-mono text-sm break-all">{user?.email}</div>
+              <div className="font-mono text-xs text-muted mt-1 break-all">user id: {user?.id}</div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 shrink-0">
               <button className="btn" disabled={busy} onClick={changePassword}>Change Password</button>
               <button className="btn" onClick={signOut}>Sign Out</button>
             </div>
