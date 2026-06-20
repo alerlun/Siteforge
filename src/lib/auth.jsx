@@ -71,3 +71,10 @@ export function AuthProvider({ children }) {
 export function useAuth() {
   return useContext(AuthCtx);
 }
+
+export function isProUser(profile) {
+  if (!profile) return false;
+  if (profile.plan === 'pro') return true;
+  if (profile.pro_until && new Date(profile.pro_until) > new Date()) return true;
+  return false;
+}
