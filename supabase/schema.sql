@@ -165,9 +165,12 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_free bigint;
 begin
-  insert into public.profiles (id, email)
-  values (new.id, new.email)
+  select value::bigint into v_free from public.config where key = 'credit_monthly_free';
+  insert into public.profiles (id, email, credit_balance)
+  values (new.id, new.email, coalesce(v_free, 68000))
   on conflict (id) do nothing;
   return new;
 end;
@@ -372,5 +375,175 @@ begin
       else                   coalesce(v_free,  68000)
     end
   where credit_balance = 0 or credit_balance is null;
+end;
+$$;
+
+-- ───────────── referral system ─────────────
+
+alter table public.profiles
+  add column if not exists referral_code      text unique,
+  add column if not exists referred_by        uuid references public.profiles(id),
+  add column if not exists referral_count     integer default 0,
+  add column if not exists referral_milestone integer default 0,
+  add column if not exists pro_until          timestamptz,
+  add column if not exists signup_ip          inet;
+
+-- referral_activations: one row per referral relationship, ever.
+create table if not exists public.referral_activations (
+  id                  uuid primary key default gen_random_uuid(),
+  referrer_id         uuid references public.profiles(id) on delete cascade not null,
+  referred_id         uuid references public.profiles(id) on delete cascade not null,
+  status              text not null default 'pending'
+                        check (status in ('pending','confirmed','rejected')),
+  reject_reason       text,
+  signup_ip           inet,
+  first_generation_at timestamptz,
+  confirmed_at        timestamptz,
+  created_at          timestamptz default now(),
+  constraint referral_activations_referred_unique unique (referred_id)
+);
+
+create index if not exists referral_activations_referrer_idx
+  on public.referral_activations (referrer_id, status);
+
+alter table public.referral_activations enable row level security;
+
+drop policy if exists "referral_activations self read" on public.referral_activations;
+create policy "referral_activations self read" on public.referral_activations
+  for select using (auth.uid() = referrer_id or auth.uid() = referred_id);
+
+-- Backfill referral codes for users who signed up before this migration.
+do $$
+declare
+  r record;
+  v_code text;
+begin
+  for r in select id from public.profiles where referral_code is null loop
+    loop
+      v_code := 'SF-' || upper(substring(encode(gen_random_bytes(4), 'hex'), 1, 6));
+      exit when not exists (select 1 from public.profiles where referral_code = v_code);
+    end loop;
+    update public.profiles set referral_code = v_code where id = r.id;
+  end loop;
+end;
+$$;
+
+-- Updated handle_new_user: generates referral code + seeds credits + handles attribution.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_free          bigint;
+  v_code          text;
+  v_referral_code text;
+  v_referrer_id   uuid;
+begin
+  select value::bigint into v_free from public.config where key = 'credit_monthly_free';
+
+  -- Generate unique referral code for new user.
+  loop
+    v_code := 'SF-' || upper(substring(encode(gen_random_bytes(4), 'hex'), 1, 6));
+    exit when not exists (select 1 from public.profiles where referral_code = v_code);
+  end loop;
+
+  insert into public.profiles (id, email, credit_balance, referral_code)
+  values (new.id, new.email, coalesce(v_free, 68000), v_code)
+  on conflict (id) do nothing;
+
+  -- Handle referral code passed via signUp metadata (email signup path).
+  v_referral_code := new.raw_user_meta_data->>'referral_code';
+  if v_referral_code is not null then
+    select id into v_referrer_id
+      from public.profiles
+     where referral_code = upper(v_referral_code);
+
+    if v_referrer_id is not null and v_referrer_id != new.id then
+      update public.profiles set referred_by = v_referrer_id where id = new.id;
+      insert into public.referral_activations (referrer_id, referred_id)
+      values (v_referrer_id, new.id)
+      on conflict (referred_id) do nothing;
+    else
+      -- Self-referral or unknown code: log as rejected.
+      insert into public.referral_activations (referrer_id, referred_id, status, reject_reason)
+      values (coalesce(v_referrer_id, new.id), new.id, 'rejected', 'self_referral')
+      on conflict (referred_id) do nothing;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Hourly job: confirm pending referrals that have passed the 24h + first-generation gate.
+create or replace function public.process_referrals()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  r               record;
+  v_new_count     integer;
+  v_milestone     integer;
+  v_earned        integer;
+  v_pro_credits   bigint;
+begin
+  select value::bigint into v_pro_credits from public.config where key = 'credit_monthly_pro';
+
+  for r in
+    select ra.id, ra.referrer_id
+      from public.referral_activations ra
+     where ra.status = 'pending'
+       and ra.first_generation_at is not null
+       and ra.first_generation_at < now() - interval '24 hours'
+       -- Daily cap: max 10 confirmations per referrer per 24h (anti-burst-fraud).
+       and (
+         select count(*) from public.referral_activations
+          where referrer_id = ra.referrer_id
+            and status = 'confirmed'
+            and confirmed_at > now() - interval '24 hours'
+       ) < 10
+  loop
+    update public.referral_activations
+       set status = 'confirmed', confirmed_at = now()
+     where id = r.id;
+
+    update public.profiles
+       set referral_count = referral_count + 1
+     where id = r.referrer_id
+     returning referral_count into v_new_count;
+
+    select referral_milestone into v_milestone
+      from public.profiles where id = r.referrer_id;
+
+    v_earned := (v_new_count / 5) * 5;
+
+    if v_earned > coalesce(v_milestone, 0) then
+      update public.profiles
+         set referral_milestone = v_earned,
+             pro_until = greatest(coalesce(pro_until, now()), now()) + interval '1 month',
+             -- Top up credits to Pro level immediately when milestone earned.
+             credit_balance = greatest(credit_balance, coalesce(v_pro_credits, 680000))
+       where id = r.referrer_id;
+    end if;
+  end loop;
+end;
+$$;
+
+-- Schedule process_referrals hourly.
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_cron') then
+    perform cron.unschedule('siteforge_process_referrals')
+      where exists (select 1 from cron.job where jobname = 'siteforge_process_referrals');
+    perform cron.schedule(
+      'siteforge_process_referrals',
+      '0 * * * *',
+      $cron$select public.process_referrals();$cron$
+    );
+  end if;
 end;
 $$;
