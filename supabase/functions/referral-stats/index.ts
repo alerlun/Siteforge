@@ -2,7 +2,7 @@ import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
 import { errorResponse } from '../_shared/guards.ts';
 
-const APP_URL = Deno.env.get('APP_URL') ?? 'https://siteforge.io';
+const APP_URL = Deno.env.get('APP_URL') ?? 'https://siteforge-vert.vercel.app';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
