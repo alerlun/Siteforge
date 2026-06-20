@@ -590,7 +590,7 @@ Deno.serve(async (req) => {
         const creditsUsed = Number(computeCredits(totalUsage, rates));
 
         // Fire-and-forget referral check — never block the SSE result.
-        checkReferralActivation(supabase, user.id).catch(() => {});
+        void checkReferralActivation(supabase, user.id).catch(() => {});
 
         console.log('[generate-site] sending result, html_len:', html.length, 'credits:', creditsUsed);
         const { html_output: _dropped, ...siteForClient } = site;
