@@ -1,6 +1,7 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase.js';
+import { storePendingReferral } from '../lib/referral.js';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -9,6 +10,12 @@ export default function Signup() {
   const [err, setErr] = useState('');
   const [info, setInfo] = useState('');
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const refCode = searchParams.get('ref')?.trim().toUpperCase() || null;
+
+  useEffect(() => {
+    if (refCode) storePendingReferral(refCode);
+  }, [refCode]);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -18,7 +25,10 @@ export default function Signup() {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      options: { emailRedirectTo: `${window.location.origin}/app/chat` },
+      options: {
+        emailRedirectTo: `${window.location.origin}/app/chat`,
+        data: refCode ? { referral_code: refCode } : undefined,
+      },
     });
     setBusy(false);
     if (error) return setErr(error.message);
@@ -44,6 +54,11 @@ export default function Signup() {
         <Link to="/" className="font-mono uppercase tracking-widest text-sm">
           Site<span className="text-accent">Forge</span>
         </Link>
+        {refCode && (
+          <div className="mb-4 font-mono text-xs text-accent border border-accent/30 rounded px-3 py-2">
+            You were invited to SiteForge
+          </div>
+        )}
         <h1 className="font-mono text-2xl mt-4 mb-6">Create account</h1>
         <form onSubmit={onSubmit} className="space-y-4">
           <div>
