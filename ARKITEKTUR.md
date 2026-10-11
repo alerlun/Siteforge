@@ -282,7 +282,7 @@ Rate limiting är fail-open (DB-fel → anropet släpps igenom). CORS är `*`.
 
 `profiles` är skrivskyddad för klienter sedan migrationen 2026-10-07: policyerna för insert/update är borttagna, och `anon`/`authenticated` har bara SELECT på tabellen. Profilrader skapas av `handle_new_user()` och ändras bara av Edge Functions och DB-funktioner.
 
-**Tabellrättigheter bakom RLS (live 2026-10-11):** `anon` och `authenticated` har SELECT/INSERT/UPDATE/DELETE på `config`, `rate_limits` och `referral_activations`, och på de fyra "egna"-tabellerna. RLS blockerar det som saknar policy, så det är tätt i dag, men det vilar enbart på RLS (se 8.1).
+**Tabellrättigheter (live 2026-10-11):** `anon`/`authenticated` har inga rättigheter på `config`, `rate_limits` och `stripe_events`, bara SELECT på `profiles`, `credit_ledger` och `referral_activations`, och full åtkomst (begränsad av RLS) på de fyra "egna"-tabellerna `leads`, `chat_sessions`, `chat_messages`, `generated_sites`.
 
 Vad klienten skriver direkt (RLS): `chat_messages` (insert/update), `chat_sessions` (delete), `leads.status`, `generated_sites` (status/pris/namn via SaleModal, `html_output` via Editor).
 
@@ -311,7 +311,7 @@ Inga värden anges här.
 
 ## 8. Avvikelser och risker som hittades
 
-Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 3b, 10 (delvis), 13, 14, 16.
+Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 10 (delvis), 13, 14, 16.
 
 ### 8.1 Säkerhet
 
@@ -321,7 +321,7 @@ Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 3b, 10 (delv
    - `reset_monthly_counters()` – vem som helst kan återställa alla användares saldon när som helst.
    - `process_referrals()` och `check_rate_limit()` – kan anropas utifrån (mindre allvarligt).
 3. ✅ **Åtgärdad:** `authenticated` har inte längre INSERT på `credit_ledger`, bara SELECT.
-3b. **Ny (2026-10-11, låg risk):** `anon` och `authenticated` har fortfarande alla tabellrättigheter på `config`, `rate_limits` och `referral_activations` (Supabase-standard). Ingen policy tillåter skrivning, så RLS stoppar det i dag. Om någon av misstag lägger till en bred policy eller stänger av RLS på `config`, kan klienter läsa `stripe_webhook_secret` och ändra kreditsatserna. Det kan stängas med en REVOKE i en senare migration.
+3b. ✅ **Åtgärdad** (`20261012110000`: `config`/`rate_limits` inga klienträttigheter, `referral_activations` bara SELECT). ~~**Ny (2026-10-11, låg risk):**~~ `anon` och `authenticated` har fortfarande alla tabellrättigheter på `config`, `rate_limits` och `referral_activations` (Supabase-standard). Ingen policy tillåter skrivning, så RLS stoppar det i dag. Om någon av misstag lägger till en bred policy eller stänger av RLS på `config`, kan klienter läsa `stripe_webhook_secret` och ändra kreditsatserna. Det kan stängas med en REVOKE i en senare migration.
 
 ### 8.2 Betal- och kreditlogik
 
