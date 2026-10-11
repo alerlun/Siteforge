@@ -1,16 +1,17 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Landing from './pages/Landing.jsx';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
 import AppLayout from './pages/AppLayout.jsx';
 import Chat from './pages/Chat.jsx';
-import Leads from './pages/Leads.jsx';
-import Stats from './pages/Stats.jsx';
-import Settings from './pages/Settings.jsx';
-import Editor from './pages/Editor.jsx';
 import Privacy from './pages/Privacy.jsx';
 import Terms from './pages/Terms.jsx';
+
+const Leads    = lazy(() => import('./pages/Leads.jsx'));
+const Stats    = lazy(() => import('./pages/Stats.jsx'));
+const Settings = lazy(() => import('./pages/Settings.jsx'));
+const Editor   = lazy(() => import('./pages/Editor.jsx'));
 import ProtectedRoute from './components/ProtectedRoute.jsx';
 import ConsentBanner from './components/ConsentBanner.jsx';
 import { initAnalytics, trackPageView } from './lib/analytics.js';
@@ -42,10 +43,10 @@ export default function App() {
       >
         <Route index element={<Navigate to="chat" replace />} />
         <Route path="chat" element={<Chat />} />
-        <Route path="leads" element={<Leads />} />
-        <Route path="stats" element={<Stats />} />
-        <Route path="settings" element={<Settings />} />
-        <Route path="editor/:siteId" element={<Editor />} />
+        <Route path="leads" element={<Suspense fallback={null}><Leads /></Suspense>} />
+        <Route path="stats" element={<Suspense fallback={null}><Stats /></Suspense>} />
+        <Route path="settings" element={<Suspense fallback={null}><Settings /></Suspense>} />
+        <Route path="editor/:siteId" element={<Suspense fallback={null}><Editor /></Suspense>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

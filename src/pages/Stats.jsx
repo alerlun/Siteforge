@@ -48,7 +48,7 @@ export default function Stats() {
         <div className="font-mono uppercase tracking-widest text-xs text-muted">statistics</div>
       </header>
 
-      <div className="flex-1 overflow-auto px-5 py-5 space-y-5">
+      <div className="flex-1 overflow-auto px-5 py-5 space-y-5 pb-14 md:pb-5">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Metric label="TOTAL SITES GENERATED" value={metrics.total} />
           <Metric label="TOTAL SITES SOLD" value={metrics.sold} />
@@ -84,43 +84,45 @@ export default function Stats() {
         <div className="card">
           <div className="px-4 py-3 border-b border-border label flex items-center justify-between">
             <span>recent sales</span>
-            <span className="text-[10px] text-muted">click "Edit" on any row to log price + type</span>
+            <span className="hidden sm:inline text-[10px] text-muted">click "Edit" on any row to log price + type</span>
           </div>
           {loading ? (
             <div className="p-4 font-mono text-xs text-muted">loading…</div>
           ) : sites.length === 0 ? (
             <div className="p-4 font-mono text-xs text-muted">no sites generated yet.</div>
           ) : (
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Business Name</th>
-                  <th>Type</th>
-                  <th>Location</th>
-                  <th>Sale Price</th>
-                  <th>Date</th>
-                  <th>Status</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {sites.map((s) => (
-                  <tr key={s.id}>
-                    <td className="font-mono">{s.business_name || '—'}</td>
-                    <td className="text-muted">{s.business_type || '—'}</td>
-                    <td>{s.client_location || <span className="text-muted">—</span>}</td>
-                    <td className="font-mono">{s.sale_price ? formatCurrency(s.sale_price) : <span className="text-muted">—</span>}</td>
-                    <td className="font-mono text-muted">{formatDate(s.created_at)}</td>
-                    <td><StatusBadge value={s.status ?? 'pending'} /></td>
-                    <td>
-                      <button className="btn text-[11px] py-1 px-2" onClick={() => setEditing(s)}>
-                        {s.status === 'sold' ? 'Edit' : 'Mark Sold'}
-                      </button>
-                    </td>
+            <div className="overflow-x-auto">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Business Name</th>
+                    <th>Type</th>
+                    <th>Location</th>
+                    <th>Sale Price</th>
+                    <th>Date</th>
+                    <th>Status</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sites.map((s) => (
+                    <tr key={s.id}>
+                      <td className="font-mono">{s.business_name || '—'}</td>
+                      <td className="text-muted">{s.business_type || '—'}</td>
+                      <td>{s.client_location || <span className="text-muted">—</span>}</td>
+                      <td className="font-mono">{s.sale_price ? formatCurrency(s.sale_price) : <span className="text-muted">—</span>}</td>
+                      <td className="font-mono text-muted">{formatDate(s.created_at)}</td>
+                      <td><StatusBadge value={s.status ?? 'pending'} /></td>
+                      <td>
+                        <button className="btn text-[11px] py-1 px-2" onClick={() => setEditing(s)}>
+                          {s.status === 'sold' ? 'Edit' : 'Mark Sold'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </div>

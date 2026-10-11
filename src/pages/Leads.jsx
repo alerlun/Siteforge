@@ -145,46 +145,46 @@ export default function Leads() {
 
   return (
     <div className="flex flex-col h-screen">
-      <header className="border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
-        <div className="font-mono uppercase tracking-widest text-xs text-muted">leads</div>
-        <div className="flex items-center gap-3">
-          <span className="badge border-border text-text">Leads used: {used}/{limit}</span>
+      <header className="border-b border-border h-14 px-5 flex items-center justify-between shrink-0 gap-3">
+        <div className="font-mono uppercase tracking-widest text-xs text-muted shrink-0">leads</div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <span className="badge border-border text-text whitespace-nowrap">Leads used: {used}/{limit}</span>
           {isPro && (
-            <button className="btn" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
+            <button className="btn text-xs px-2 py-1" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
           )}
         </div>
       </header>
 
       <div className="px-5 py-4 border-b border-border">
         <form onSubmit={onSearch} className="flex flex-wrap items-end gap-3">
-          <div className="min-w-[180px]">
+          <div className="w-full sm:w-auto sm:min-w-[180px]">
             <div className="label mb-1">Business Type</div>
             <input className="input" placeholder="plumber" value={businessType} onChange={(e) => setBusinessType(e.target.value)} />
           </div>
-          <div className="min-w-[180px]">
+          <div className="w-full sm:w-auto sm:min-w-[180px]">
             <div className="label mb-1">City</div>
             <input className="input" placeholder="Austin, TX" value={city} onChange={(e) => setCity(e.target.value)} />
           </div>
-          <div className="min-w-[120px]">
+          <div className="w-[calc(50%-6px)] sm:w-auto sm:min-w-[120px]">
             <div className="label mb-1">Radius</div>
             <select className="input" value={radius} onChange={(e) => setRadius(e.target.value)}>
               {RADIUS_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
-          <div className="min-w-[140px]">
+          <div className="w-[calc(50%-6px)] sm:w-auto sm:min-w-[140px]">
             <div className="label mb-1">Max Results</div>
             <select className="input" value={maxResults} onChange={(e) => setMaxResults(parseInt(e.target.value, 10))}>
               {RESULT_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
           </div>
-          <div className="min-w-[200px]">
+          <div className="w-full sm:w-auto sm:min-w-[200px]">
             <div className="label mb-1">Website Filter</div>
             <select className="input" value={websiteFilter} onChange={(e) => setWebsiteFilter(e.target.value)}>
               <option value="without">Without website only</option>
               <option value="both">With + without websites</option>
             </select>
           </div>
-          <button className="btn-primary" disabled={searching}>
+          <button className="btn-primary w-full sm:w-auto" disabled={searching}>
             {searching ? 'searching…' : 'Search Leads'}
           </button>
         </form>
@@ -197,12 +197,13 @@ export default function Leads() {
         {error && <div className="mt-3 font-mono text-xs text-accent">{error}</div>}
       </div>
 
-      <div className="flex-1 overflow-auto">
+      <div className="flex-1 overflow-auto pb-14 md:pb-0">
         {loading ? (
           <div className="p-6 font-mono text-xs text-muted">loading…</div>
         ) : rows.length === 0 ? (
           <div className="p-6 font-mono text-xs text-muted">no leads yet — run a search above.</div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="data">
             <thead className="sticky top-0 bg-surface z-10">
               <tr>
@@ -313,6 +314,7 @@ export default function Leads() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </div>
