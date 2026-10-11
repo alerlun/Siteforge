@@ -59,7 +59,7 @@ Deno.serve(async (req) => {
     const supabase = adminClient();
     const { data: profile } = await supabase
       .from('profiles')
-      .select('plan, leads_used')
+      .select('plan, pro_until, leads_used')
       .eq('id', user.id)
       .single();
     if (!profile) {
@@ -68,11 +68,16 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    const limit = PLAN_LIMITS[(profile.plan as 'free' | 'pro') ?? 'free'].leads;
+    // Same rule as the DB function effective_plan(): Pro via Stripe/manual (plan) or via
+    // referral reward (pro_until in the future).
+    const plan: 'free' | 'pro' =
+      profile.plan === 'pro' || (profile.pro_until && new Date(profile.pro_until) > new Date())
+        ? 'pro' : 'free';
+    const limit = PLAN_LIMITS[plan].leads;
     const remaining = Math.max(0, limit - (profile.leads_used ?? 0));
     if (remaining <= 0) {
       return new Response(
-        JSON.stringify({ error: 'limit_reached', plan: profile.plan, limit }),
+        JSON.stringify({ error: 'limit_reached', plan, limit }),
         { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
@@ -87,11 +92,24 @@ Deno.serve(async (req) => {
       `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(`${businessType} in ${city}`)}` +
       `&radius=${radiusM}&key=${apiKey}`;
     while (collected.length < examineCap) {
+      // Follow-up pages must repeat the original query parameters next to pagetoken;
+      // pagetoken alone is answered with INVALID_REQUEST (verified 2026-10-11).
       const url = pageToken
-        ? `https://maps.googleapis.com/maps/api/place/textsearch/json?pagetoken=${pageToken}&key=${apiKey}`
+        ? `${queryBase}&pagetoken=${encodeURIComponent(pageToken)}`
         : queryBase;
       const res = await fetch(url);
       const json = await res.json();
+      // Google answers 200 with a status field; anything but OK / ZERO_RESULTS is an
+      // error (e.g. REQUEST_DENIED when billing is off) and must not look like "0 leads".
+      if (json.status !== 'OK' && json.status !== 'ZERO_RESULTS') {
+        console.error('[scrape-leads] Places Text Search failed:', pageToken ? 'next page' : 'first page', json.status, json.error_message);
+        // A later page failing should not throw away the results already collected.
+        if (pageToken && collected.length) break;
+        return errorResponse(502, 'places_api_error', {
+          status: json.status,
+          message: json.error_message ?? null,
+        });
+      }
       const items: PlaceResult[] = Array.isArray(json.results) ? json.results : [];
       for (const item of items) {
         if (collected.length >= examineCap) break;

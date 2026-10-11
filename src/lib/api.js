@@ -1,4 +1,5 @@
 import { supabase } from './supabase.js';
+import { isProUser } from './auth.jsx';
 
 async function authHeader() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -90,7 +91,8 @@ export const PLAN_LIMITS = {
   pro: { generations: 10, leads: 100 },
 };
 
+// Pro = plan 'pro' or an active referral reward (pro_until), same as the server.
 export function planLimit(profile, kind) {
-  const plan = profile?.plan === 'pro' ? 'pro' : 'free';
+  const plan = isProUser(profile) ? 'pro' : 'free';
   return PLAN_LIMITS[plan][kind];
 }

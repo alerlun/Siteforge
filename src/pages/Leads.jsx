@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import { supabase } from '../lib/supabase.js';
-import { useAuth } from '../lib/auth.jsx';
-import { callFunction, planLimit } from '../lib/api.js';
+import { useAuth, isProUser } from '../lib/auth.jsx';
+import { callFunction, planLimit, PLAN_LIMITS } from '../lib/api.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import { formatDate } from '../lib/utils.js';
 
@@ -36,7 +36,7 @@ export default function Leads() {
   const [limitHit, setLimitHit] = useState(false);
   const [info, setInfo] = useState('');
 
-  const isPro = profile?.plan === 'pro';
+  const isPro = isProUser(profile);
   const limit = planLimit(profile, 'leads');
   const used = profile?.leads_used ?? 0;
 
@@ -90,7 +90,10 @@ export default function Leads() {
       await refreshProfile();
     } catch (err) {
       if (err.status === 402) setLimitHit(true);
-      else setError(err.message || 'Search failed.');
+      else if (err.data?.error === 'places_api_error') {
+        const d = err.data.detail ?? {};
+        setError(`Google Places error (${d.status ?? 'unknown'})${d.message ? `: ${d.message}` : ''}`);
+      } else setError(err.message || 'Search failed.');
     } finally {
       setSearching(false);
     }
@@ -190,7 +193,10 @@ export default function Leads() {
         </form>
         {limitHit && (
           <div className="mt-3 card border-accent p-3 font-mono text-xs">
-            Lead limit reached. Upgrade to Pro for 1,000/month.
+            Lead limit reached.{' '}
+            {isPro
+              ? 'Your limit resets on the 1st of next month.'
+              : `Upgrade to Pro for ${PLAN_LIMITS.pro.leads}/month.`}
           </div>
         )}
         {info && <div className="mt-3 font-mono text-xs text-muted">{info}</div>}
