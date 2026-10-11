@@ -16,7 +16,10 @@
 | 2c-iii | Cron-reset hoppar över Stripe-prenumeranter | `supabase/migrations/20261011210000_monthly_reset_skip_stripe_subscribers.sql` | ✅ Körd + verifierad |
 | 2d | Engångskorrigering av de två Pro-kontona till 680 000 | `supabase/migrations/20261011200000_fix_manual_pro_balances.sql` | ✅ Körd + verifierad |
 | – | Signup trasig sedan 2026-06-20 (`gen_random_bytes` utan schema) | `supabase/migrations/20261011190000_fix_signup_gen_random_bytes.sql` | ✅ Körd + verifierad |
-| 3 (D+F) | Atomisk reservation vid avdrag, ledger i samma transaktion | – | Ej påbörjad |
+| 3a | `reserve_credits` / `settle_credits` / `refund_credits`, ledger `status` + cache-tokens | `supabase/migrations/20261011220000_reserve_settle_credits.sql` | ✅ Körd + verifierad |
+| 3b | `generate-site` reserverar före AI-anrop, avräknar/återbetalar efteråt | `supabase/functions/generate-site/index.ts` | ✅ Deployad (v40) + testad |
+| 3c | Samma för `edit-element` | `supabase/functions/edit-element/index.ts` | ✅ Deployad (v10) + testad. Ledgern stämmer exakt mot saldot |
+| 3d | Ta bort `deduct_credits` | `supabase/migrations/20261011230000_drop_deduct_credits.sql` | ✅ Körd + verifierad |
 | 4 (B+C) | Frontend: läs om saldo, exakt visning, plan från servern | – | Ej påbörjad |
 
 **Att göra innan nästa steg:**
