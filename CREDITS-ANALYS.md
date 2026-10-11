@@ -20,7 +20,10 @@
 | 3b | `generate-site` reserverar före AI-anrop, avräknar/återbetalar efteråt | `supabase/functions/generate-site/index.ts` | ✅ Deployad (v40) + testad |
 | 3c | Samma för `edit-element` | `supabase/functions/edit-element/index.ts` | ✅ Deployad (v10) + testad. Ledgern stämmer exakt mot saldot |
 | 3d | Ta bort `deduct_credits` | `supabase/migrations/20261011230000_drop_deduct_credits.sql` | ✅ Körd + verifierad |
-| 4 (B+C) | Frontend: läs om saldo, exakt visning, plan från servern | – | Ej påbörjad |
+| 4a (B) | Saldot läses om vid fokus/route-byte/fel, inga inaktuella svar, behåll profil vid fel | `src/lib/auth.jsx`, `Chat.jsx`, `Editor.jsx` | ✅ Testad + committad (3ed006f) |
+| 4b (C) | Exakt saldo, läsbar kredithistorik i Settings | `src/lib/credits.js`, `Chat.jsx`, `Settings.jsx` | ✅ Committad (988c821) |
+| 4c (C) | Klientens estimat = serverns | `src/lib/credits.js`, `Chat.jsx` | ✅ Committad (988c821) |
+| 5 | Chatt-ändringar som SEARCH/REPLACE-block: ~13k i stället för ~68k credits, ingen avklippning | `supabase/functions/generate-site/index.ts` | ✅ Deployad (v41) + testad (12 997 credits) |
 
 **Att göra innan nästa steg:**
 1. ~~`supabase functions deploy stripe-webhook`~~ (klart)
