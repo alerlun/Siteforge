@@ -321,6 +321,7 @@ OUTPUT FORMAT — do NOT return the whole document. Return only one or more edit
 const EDIT_BLOCK_RE = /<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n?>>>>>>> REPLACE/g;
 
 function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0; // an empty needle would match everywhere and never advance
   let count = 0;
   for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) count++;
   return count;
@@ -334,6 +335,7 @@ function applyEditBlocks(html: string, modelText: string): string {
   if (!blocks.length) throw editFailed('The model returned no edit blocks.');
   let out = html;
   for (const [i, b] of blocks.entries()) {
+    if (!b.search.trim()) throw editFailed(`Edit block ${i + 1} of ${blocks.length} has an empty SEARCH part.`);
     let search = b.search;
     let n = countOccurrences(out, search);
     if (n === 0 && search.trim() && search.trim() !== search) {
