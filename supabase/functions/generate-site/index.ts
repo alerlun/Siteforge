@@ -63,32 +63,24 @@ function computeCredits(usage: TokenUsage, rates: CreditRates): number {
   return Math.ceil((uncached + cacheWrite + cacheRead + usage.output_tokens * rates.outRate) * rates.margin);
 }
 
+// Reserved before the AI call (reserve_credits) and corrected to the real cost afterwards
+// (settle_credits), so the estimate only needs to be close, not exact. Builds observed in
+// June 2026 cost 47k–69k credits (8–12k output tokens + system-prompt cache write), so the
+// build estimate includes a cache write and 10k output tokens.
 function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean): number {
-  const inputEst  = isEdit ? 15000 : (hasHistory ? 3000 : 1200);
-  const outputEst = isEdit ? 10000 : 8000;
-  return computeCredits({ input_tokens: inputEst, output_tokens: outputEst }, rates);
+  if (isEdit) return computeCredits({ input_tokens: 15000, output_tokens: 10000 }, rates);
+  return computeCredits({
+    input_tokens: hasHistory ? 3000 : 1200,
+    cache_creation_input_tokens: 2000,
+    output_tokens: 10000,
+  }, rates);
 }
 
-// deno-lint-ignore no-explicit-any
-async function deductCredits(
-  supabase: any,
-  userId: string,
-  totalUsage: TokenUsage,
-  actionType: string,
-  rates: CreditRates,
-  siteId: string | null,
-): Promise<void> {
-  const credits = computeCredits(totalUsage, rates);
-  // Both calls are best-effort: they silently no-op before the migration runs.
-  await supabase.rpc('deduct_credits', { p_user_id: userId, p_credits: credits }).then(null, () => {});
-  await supabase.from('credit_ledger').insert({
-    user_id: userId,
-    action_type: actionType,
-    input_tokens: totalUsage.input_tokens,
-    output_tokens: totalUsage.output_tokens,
-    credits_charged: credits,
-    site_id: siteId ?? null,
-  }).then(null, () => {});
+function addUsage(total: TokenUsage, u: TokenUsage): void {
+  total.input_tokens                += u.input_tokens ?? 0;
+  total.output_tokens               += u.output_tokens ?? 0;
+  total.cache_read_input_tokens      = (total.cache_read_input_tokens     ?? 0) + (u.cache_read_input_tokens     ?? 0);
+  total.cache_creation_input_tokens  = (total.cache_creation_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -465,12 +457,17 @@ Deno.serve(async (req) => {
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
 
-    const fallbackBalance = profile.plan === 'pro' ? rates.monthlyPro : rates.monthlyFree;
+    // Atomically withhold the estimate before any AI call. NULL = balance too low.
+    // Settled to the real cost on success, refunded on failure (see the stream below).
     const estimate = estimateCredits(rates, hasExistingSite, Array.isArray(history) && history.length > 0);
-    const currentBalance: number = (profile.credit_balance != null) ? Number(profile.credit_balance) : fallbackBalance;
-    if (currentBalance < estimate) {
+    const reservedAction = hasExistingSite ? 'edit' : 'generation';
+    const { data: reservationId, error: reserveErr } = await supabase.rpc('reserve_credits', {
+      p_user_id: user.id, p_amount: estimate, p_action: reservedAction,
+    });
+    if (reserveErr) throw new Error(`reserve_credits: ${reserveErr.message}`);
+    if (!reservationId) {
       return new Response(
-        JSON.stringify({ error: 'insufficient_credits', balance: currentBalance, estimate }),
+        JSON.stringify({ error: 'insufficient_credits', balance: Number(profile.credit_balance ?? 0), estimate }),
         { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
@@ -486,6 +483,7 @@ Deno.serve(async (req) => {
     const hb = setInterval(() => { sse({ type: 'heartbeat' }); }, 5_000);
 
     (async () => {
+      let settled = false;
       try {
         const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
         let isEditMode = false;
@@ -498,8 +496,7 @@ Deno.serve(async (req) => {
           try {
             const result = await classifyEditRequest(apiKey, prompt);
             isEditMode = result.isEdit;
-            totalUsage.input_tokens  += result.usage.input_tokens;
-            totalUsage.output_tokens += result.usage.output_tokens;
+            addUsage(totalUsage, result.usage);
           } catch { isEditMode = false; }
         }
 
@@ -509,8 +506,7 @@ Deno.serve(async (req) => {
             { role: 'system', content: editSystemPrompt(lang) },
             { role: 'user', content: `CURRENT HTML:\n${currentHtml}\n\nCHANGE REQUEST:\n${prompt}` },
           ], 0.4, 10000);
-          totalUsage.input_tokens  += editUsage.input_tokens;
-          totalUsage.output_tokens += editUsage.output_tokens;
+          addUsage(totalUsage, editUsage);
           const editedHtml = extractHtml(editRaw);
           if (editedHtml && /<!DOCTYPE\s+html/i.test(editedHtml) && editedHtml.length > 5000) {
             html = editedHtml;
@@ -535,10 +531,7 @@ Deno.serve(async (req) => {
           buildMessages.push({ role: 'user', content: buildUserMessage });
 
           const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 12000, sysBlocks);
-          totalUsage.input_tokens                  += buildUsage.input_tokens;
-          totalUsage.output_tokens                 += buildUsage.output_tokens;
-          totalUsage.cache_read_input_tokens        = (totalUsage.cache_read_input_tokens    ?? 0) + (buildUsage.cache_read_input_tokens    ?? 0);
-          totalUsage.cache_creation_input_tokens    = (totalUsage.cache_creation_input_tokens ?? 0) + (buildUsage.cache_creation_input_tokens ?? 0);
+          addUsage(totalUsage, buildUsage);
           html = extractHtml(raw);
 
           if (isSkeletalOutput(html)) {
@@ -549,10 +542,7 @@ Deno.serve(async (req) => {
               { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
             ];
             const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 12000, sysBlocks);
-            totalUsage.input_tokens                += retryUsage.input_tokens;
-            totalUsage.output_tokens               += retryUsage.output_tokens;
-            totalUsage.cache_read_input_tokens      = (totalUsage.cache_read_input_tokens    ?? 0) + (retryUsage.cache_read_input_tokens    ?? 0);
-            totalUsage.cache_creation_input_tokens  = (totalUsage.cache_creation_input_tokens ?? 0) + (retryUsage.cache_creation_input_tokens ?? 0);
+            addUsage(totalUsage, retryUsage);
             const retryHtml = extractHtml(retryRaw);
             if (retryHtml && /<!DOCTYPE\s+html/i.test(retryHtml) && retryHtml.length > 4000) html = retryHtml;
           }
@@ -583,11 +573,34 @@ Deno.serve(async (req) => {
         }).select().single();
         if (siteErr) throw new Error(siteErr.message);
 
-        // Increment the legacy counter (kept for stats) and deduct credits.
+        // Settle the reservation to the real cost (balance + ledger in one transaction).
+        // The site exists at this point, so a settle failure is logged rather than
+        // turned into a user-facing error; the reservation then stays 'reserved' and
+        // the user has paid the estimate.
+        const creditsUsed = computeCredits(totalUsage, rates);
+        const { error: settleErr } = await supabase.rpc('settle_credits', {
+          p_ledger_id: reservationId,
+          p_credits: creditsUsed,
+          p_input_tokens: totalUsage.input_tokens,
+          p_output_tokens: totalUsage.output_tokens,
+          p_cache_write_tokens: totalUsage.cache_creation_input_tokens ?? 0,
+          p_cache_read_tokens: totalUsage.cache_read_input_tokens ?? 0,
+          p_site_id: site.id,
+        });
+        if (settleErr) {
+          console.error('[generate-site] settle_credits failed:', reservationId, settleErr.message);
+        } else {
+          settled = true;
+          // The classifier may decide "new build" although a site existed (reserved as 'edit').
+          const actionType = isEditMode ? 'edit' : 'generation';
+          if (actionType !== reservedAction) {
+            const { error: actErr } = await supabase.from('credit_ledger').update({ action_type: actionType }).eq('id', reservationId);
+            if (actErr) console.error('[generate-site] ledger action_type update failed:', reservationId, actErr.message);
+          }
+        }
+
+        // Legacy counter, kept for stats only.
         await supabase.from('profiles').update({ generations_used: (profile.generations_used ?? 0) + 1 }).eq('id', user.id);
-        const actionType = isEditMode ? 'edit' : 'generation';
-        await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
-        const creditsUsed = Number(computeCredits(totalUsage, rates));
 
         // Fire-and-forget referral check — never block the SSE result.
         void checkReferralActivation(supabase, user.id).catch(() => {});
@@ -599,6 +612,11 @@ Deno.serve(async (req) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[generate-site] IIFE error:', msg);
+        // The AI call or saving failed: give the reserved estimate back.
+        if (!settled) {
+          const { error: refundErr } = await supabase.rpc('refund_credits', { p_ledger_id: reservationId });
+          if (refundErr) console.error('[generate-site] refund_credits failed:', reservationId, refundErr.message);
+        }
         // deno-lint-ignore no-explicit-any
         const e = err as any;
         await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
