@@ -12,14 +12,15 @@
 | 2a | `grant_credits()`, `effective_plan()`, ledger-kolumner `delta`/`balance_after` | `supabase/migrations/20261011120000_grant_credits.sql` | ✅ Körd + verifierad |
 | 2b | Månadsreset via `grant_credits`, räknar `pro_until`, loggar | `supabase/migrations/20261011130000_monthly_reset_via_grant_credits.sql` | ✅ Körd + verifierad (första körning 2026-11-01) |
 | 2c-i | `stripe_events` + `stripe_apply_checkout` / `stripe_apply_renewal` (idempotenta) | `supabase/migrations/20261011140000_stripe_event_handlers.sql` | ✅ Körd + verifierad |
-| 2c-ii | Webhook: uppgradering fyller på, ny `invoice.paid`, 500 vid DB-fel | `supabase/functions/stripe-webhook/index.ts` | ⏳ Ändrad lokalt, **ej deployad** |
+| 2c-ii | Webhook: uppgradering fyller på, ny `invoice.paid`, 500 vid DB-fel | `supabase/functions/stripe-webhook/index.ts` | ✅ Deployad 2026-10-11 (v24). Ingen Stripe-händelse mottagen än |
 | 2c-iii | Cron-reset hoppar över Stripe-prenumeranter | – | Ej påbörjad (först när 2c-ii fungerar) |
-| 2d | Engångskorrigering av de två Pro-kontona till 680 000 | – | Ej påbörjad |
+| 2d | Engångskorrigering av de två Pro-kontona till 680 000 | `supabase/migrations/20261011200000_fix_manual_pro_balances.sql` | ✅ Körd + verifierad |
+| – | Signup trasig sedan 2026-06-20 (`gen_random_bytes` utan schema) | `supabase/migrations/20261011190000_fix_signup_gen_random_bytes.sql` | ✅ Körd + verifierad |
 | 3 (D+F) | Atomisk reservation vid avdrag, ledger i samma transaktion | – | Ej påbörjad |
 | 4 (B+C) | Frontend: läs om saldo, exakt visning, plan från servern | – | Ej påbörjad |
 
 **Att göra innan nästa steg:**
-1. `supabase functions deploy stripe-webhook`
+1. ~~`supabase functions deploy stripe-webhook`~~ (klart)
 2. I Stripe-dashboarden (live och test): webhook-endpointen ska ta emot `checkout.session.completed`, `invoice.paid` och `customer.subscription.deleted`.
 3. Be Claude verifiera efter nästa uppgradering: rad i `stripe_events` och en `plan_upgrade`-rad i `credit_ledger`.
 
