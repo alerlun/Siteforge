@@ -19,7 +19,7 @@ Set with `supabase secrets set KEY=value` (or via Dashboard → Edge Functions �
 | `GOOGLE_PLACES_API_KEY` | Places search for `scrape-leads` |
 
 Rate limiting is **Postgres-backed** (Supabase) and needs no secrets — see `schema.sql`
-(`rate_limits` table + `check_rate_limit()` function). Just apply `schema.sql`.
+(`rate_limits` table + `check_rate_limit()` function). Already applied in the live DB.
 
 **Never** put any of these in a Vite `VITE_*` variable — those reach the browser bundle.
 
@@ -48,7 +48,11 @@ If a knob isn't exposed at that exact value, pick the closest stricter one — n
 
 ## 4. Database
 
-- **RLS** must be enabled on every table that holds user data (`profiles`, `leads`, `chat_sessions`, `generated_sites`, `chat_messages`). Confirm before going live; the schema in `schema.sql` is the source of truth.
+- **RLS** must be enabled on every table that holds user data (`profiles`, `leads`, `chat_sessions`, `generated_sites`, `chat_messages`). Confirm before going live; the schema is `schema.sql` (frozen baseline, 2026-10-07) plus the files in `supabase/migrations/`, applied in order.
+
+## 4b. Schema changes
+
+All DB changes are made as new migration files in `supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql`, one focused change per file, reviewed before they are applied (`supabase db push` or the SQL editor). Never edit `schema.sql` and never change the production database directly.
 - The service role key in `_shared/auth.ts` bypasses RLS — only used inside Edge Functions, never shipped to the client.
 
 ## 5. Webhooks
