@@ -4,7 +4,7 @@
 > `README.md` och `TODO.md` är inaktuella (beskriver OpenAI och gamla plangränser) – lita på detta dokument och koden.
 > Avsnitt 8 listar avvikelser och risker som hittades under genomgången.
 >
-> **Uppdaterad 2026-10-11** efter en ny genomgång. Ingen kod eller edge function har ändrats sedan 2026-10-07 (edge functions senast deployade i juni 2026). Det som ändrats i live-DB är att migrationen `20261007200000_lock_down_profiles_and_credit_functions` är körd och verifierad. Avsnitt 3, 4, 6.3 och 8 är uppdaterade efter det.
+> **Uppdaterad 2026-10-11 (kväll)** efter credits-, Stripe-, värvnings- och leadsfixarna (se åtgärdsloggen i `CREDITS-ANALYS.md`). Avsnitt 3–5 beskriver det nuvarande flödet; avsnitt 8 visar vad som är åtgärdat.
 
 ---
 
@@ -77,7 +77,7 @@ siteforge/
 └── SECURITY_AUDIT.md
 ```
 
-**Rutin för DB-ändringar (beslutad 2026-10-07):** `schema.sql` är ett fryst utgångsläge som motsvarar live-databasen 2026-10-07 och redigeras inte längre. Varje ändring görs som en ny fil `supabase/migrations/<YYYYMMDDHHMMSS>_<namn>.sql`, med en avgränsad ändring per fil. Filen granskas innan den körs (`supabase db push` eller SQL-editorn). Aktuellt schema = `schema.sql` + alla migrationer i ordning. Fram till 2026-10-07 applicerades schemat genom att köra `schema.sql` manuellt. Live-databasen har en registrerad migration (2026-10-11): `20261007200000_lock_down_profiles_and_credit_functions`.
+**Rutin för DB-ändringar (beslutad 2026-10-07):** `schema.sql` är ett fryst utgångsläge som motsvarar live-databasen 2026-10-07 och redigeras inte längre. Varje ändring görs som en ny fil `supabase/migrations/<YYYYMMDDHHMMSS>_<namn>.sql`, med en avgränsad ändring per fil. Filen granskas innan den körs (`supabase db push` eller SQL-editorn). Aktuellt schema = `schema.sql` + alla migrationer i ordning. Fram till 2026-10-07 applicerades schemat genom att köra `schema.sql` manuellt. Alla migrationer i `supabase/migrations/` är körda mot live-databasen och registrerade (`supabase_migrations.schema_migrations`), senast `20261012100000_confirm_referral` (2026-10-11).
 
 ### Routes (`src/App.jsx`)
 
@@ -107,6 +107,7 @@ auth.users ──1:1──> profiles ──┬──< leads ──0..1── cha
 
 config        (nyckel/värde, fristående)
 rate_limits   (nyckel/räknare, fristående)
+stripe_events (Stripe event-id, dedup för webhooken)
 ```
 
 | Tabell | Syfte | Viktiga kolumner | Relationer |
@@ -116,29 +117,39 @@ rate_limits   (nyckel/räknare, fristående)
 | `chat_sessions` | En chattråd | `title`, `updated_at`, `lead_id` (unik när satt → en chatt per lead) | `user_id` → profiles, `lead_id` → leads (set null) |
 | `chat_messages` | Meddelanden i en tråd | `role` (`user`/`assistant`), `content`, `site_id` | `session_id` → chat_sessions (cascade), `site_id` → generated_sites (set null) |
 | `generated_sites` | Varje genererad/ändrad sajtversion | `html_output`, `status` (`pending` …), `sale_price`, `business_name/type`, `client_location` | `user_id` → profiles, `session_id` → chat_sessions (set null) |
-| `credit_ledger` | Logg över varje debiterat AI-anrop | `action_type` (`generation`/`edit`/`element_edit`), `input_tokens`, `output_tokens`, `credits_charged` | `user_id` → profiles, `site_id` → generated_sites |
+| `credit_ledger` | En rad per ändring av saldot (avdrag och påfyllning) | `action_type` (`generation`/`edit`/`element_edit`/`monthly_reset`/`renewal`/`plan_upgrade`/`referral_bonus`/`manual_correction`), `status` (`reserved`/`settled`/`refunded`), `delta` (±), `balance_after`, `credits_charged`, `input_tokens`, `output_tokens`, `cache_write_tokens`, `cache_read_tokens` | `user_id` → profiles, `site_id` → generated_sites |
+| `stripe_events` | En rad per tillämpad Stripe-händelse (dedup) | `id` (Stripe event-id), `type`, `user_id`, `received_at` | `user_id` → profiles (set null) |
 | `referral_activations` | En rad per värvningsrelation | `status` (`pending`/`confirmed`/`rejected`), `reject_reason`, `first_generation_at`, `confirmed_at`, `signup_ip` | `referrer_id`, `referred_id` (unik) → profiles |
 | `config` | Inställningar utan deploy | nycklar: `credit_in_rate`, `credit_out_rate`, `credit_margin`, `credit_monthly_free`, `credit_monthly_pro`, `stripe_mode`, `stripe_publishable_key`, `stripe_webhook_secret` | – |
 | `rate_limits` | Fast-fönster-räknare för rate limiting | `key`, `count`, `window_start` | – |
 
 Varje ny sajtversion (även en chatt-ändring) blir en **ny rad** i `generated_sites`; Chat läser senaste raden per session. Element-ändringar i Editor skriver däremot över `html_output` på befintlig rad.
 
-### Databasfunktioner, triggers och cron (verifierat mot live-DB)
+### Databasfunktioner, triggers och cron (verifierat mot live-DB 2026-10-11)
 
-| Objekt | Typ | Gör |
+Alla funktioner nedan är SECURITY DEFINER med `search_path = public` och kan bara köras av `postgres` (cron) och `service_role` (Edge Functions), utom `handle_new_user` (triggerfunktion, kan inte anropas som RPC) och `effective_plan` (ren hjälpfunktion).
+
+| Objekt | Gör | Migration |
 |---|---|---|
-| `handle_new_user()` | trigger `on_auth_user_created` på `auth.users` (AFTER INSERT), SECURITY DEFINER | Skapar `profiles`-rad med `credit_balance = config.credit_monthly_free` (fallback 68000) och unik `referral_code`. Läser `raw_user_meta_data.referral_code` (e-postsignup) och skapar `referral_activations` (eller `rejected/self_referral`). |
-| `deduct_credits(p_user_id, p_credits)` | RPC, SECURITY DEFINER, endast `service_role` | `credit_balance -= p_credits`, returnerar nytt saldo. Avvisar `p_credits` < 0 eller null (sedan migrationen 2026-10-07). Inget golv – saldot kan fortfarande bli negativt. |
-| `reset_monthly_counters()` | SECURITY DEFINER | Nollställer `leads_used`, `generations_used` och sätter `credit_balance` till Pro- eller Free-allowance beroende på `plan`. |
-| `process_referrals()` | SECURITY DEFINER | Bekräftar pending värvningar där `first_generation_at` är > 24 h gammal (max 10/värvare/24 h), räknar upp `referral_count`, och vid var 5:e: `pro_until += 1 månad`, `credit_balance = max(saldo, Pro-allowance)`. |
-| `check_rate_limit(key, limit, window)` | RPC, SECURITY DEFINER, endast `service_role` | Atomisk upsert-räknare. |
-| `purge_rate_limits()` | endast `service_role` | Raderar räknare äldre än 1 h. |
+| `handle_new_user()` (trigger `on_auth_user_created`, AFTER INSERT på `auth.users`) | Skapar `profiles`-rad med `credit_balance = config.credit_monthly_free` och unik `referral_code` (`extensions.gen_random_bytes`). Läser `raw_user_meta_data.referral_code` och skapar `referral_activations`. | baseline, `20261011190000` |
+| `effective_plan(plan, pro_until)` | `'pro'` om `plan = 'pro'` eller `pro_until` i framtiden, annars `'free'`. Samma regel som `isProUser()` i klienten och `scrape-leads`. | `20261011120000` |
+| `grant_credits(user, reason)` | **Enda vägen att fylla på.** Låser profilraden, sätter saldot och skriver en ledger-rad i samma transaktion. `monthly_reset`/`renewal` → saldo := tilldelning. `plan_upgrade`/`referral_bonus`/`manual_correction` → saldo := max(saldo, tilldelning). Tilldelning efter `effective_plan`. | `20261011120000` |
+| `reserve_credits(user, belopp, typ)` | Före AI-anrop: drar estimatet **bara om saldot räcker** och skapar ledger-rad `reserved`. Returnerar rad-id eller NULL (→ 402). | `20261011220000` |
+| `settle_credits(rad, credits, tokens…, sajt)` | Efter lyckat AI-anrop: justerar saldot med (verklig − estimat) och sätter raden till `settled` med alla tokens, `delta`, `balance_after`. | `20261011220000` |
+| `refund_credits(rad)` | Efter misslyckat AI-anrop: ger tillbaka estimatet, raden blir `refunded`. | `20261011220000` |
+| `reset_monthly_counters()` | Nollställer `leads_used`/`generations_used` för alla, och kör `grant_credits(id, 'monthly_reset')` för alla **utom** aktiva Stripe-prenumeranter (de fylls på via `invoice.paid`). Loggar antal. Fel → hela reseten rullas tillbaka. | `20261011130000`, `20261011210000` |
+| `stripe_apply_checkout(event, user, kund, prenumeration)` | Idempotent per Stripe-händelse (`stripe_events`): `plan = 'pro'`, Stripe-id:n, `grant_credits(user, 'plan_upgrade')`. | `20261011140000` |
+| `stripe_apply_renewal(event, kund)` | Idempotent: `grant_credits(user, 'renewal')` för Pro-profilen med den kunden. | `20261011140000` |
+| `confirm_referral(activation)` | Atomisk bekräftelse av en värvning: bara `pending`, dagstak 10/värvare/24 h, `referral_count + 1`, vid var 5:e: `pro_until += 1 månad` + `grant_credits(värvare, 'referral_bonus')`. | `20261012100000` |
+| `process_referrals()` | Cron: anropar `confirm_referral` för varje pending värvning vars `first_generation_at` är äldre än 24 h. | `20261012100000` |
+| `check_rate_limit(key, limit, window)` | Atomisk upsert-räknare för rate limiting. | baseline |
+| `purge_rate_limits()` | Raderar räknare äldre än 1 h. | baseline |
 
-**Vem får köra funktionerna (live 2026-10-11):** `reset_monthly_counters`, `process_referrals`, `deduct_credits`, `check_rate_limit` och `purge_rate_limits` kan bara köras av `postgres` (cron) och `service_role` (Edge Functions). `handle_new_user` har kvar EXECUTE för alla roller, men det är en triggerfunktion och kan inte anropas som RPC.
+`deduct_credits` är borttagen (`20261011230000`), ersatt av reserve/settle/refund.
 
 | Cron-jobb (pg_cron) | Schema | Anrop |
 |---|---|---|
-| `siteforge_reset_monthly` | `0 0 1 * *` (1:a varje månad 00:00 UTC) | `reset_monthly_counters()` |
+| `siteforge_reset_monthly` | `0 0 1 * *` (1:a varje månad 00:00 UTC = 01:00/02:00 svensk tid) | `reset_monthly_counters()` |
 | `siteforge_process_referrals` | `0 * * * *` (varje timme) | `process_referrals()` |
 | `siteforge_purge_rate_limits` | `0 * * * *` (varje timme) | `purge_rate_limits()` |
 
@@ -148,7 +159,9 @@ Inga andra triggers finns på `public`-tabellerna.
 
 ## 4. Credits – hela flödet
 
-**Formel** (server, `generate-site/index.ts` `computeCredits`):
+**Princip (sedan 2026-10-11):** varje ändring av `profiles.credit_balance` görs av en DB-funktion som skriver en rad i `credit_ledger` i **samma transaktion**. Saldot kan därför alltid stämmas av mot ledgern (`delta`, `balance_after`). Klienten kan bara läsa sitt saldo och sin ledger.
+
+**Formel** (`computeCredits` i `generate-site` och `edit-element`):
 
 ```
 credits = ceil( ( input_tokens        * in_rate
@@ -157,65 +170,75 @@ credits = ceil( ( input_tokens        * in_rate
                 + output_tokens       * out_rate ) * margin )
 ```
 
-Standardvärden: `in_rate = 1`, `out_rate = 5`, `margin = 1.1`. `edit-element` använder samma formel utan cache-termer.
+Värden i `config`: `in_rate = 1`, `out_rate = 5`, `margin = 1.1`. `edit-element` använder ingen cache.
 
-### 4.1 Var satserna finns (två ställen som måste hållas i synk)
+### 4.1 Var satserna finns
 
 | Plats | Innehåll | Används till |
 |---|---|---|
-| DB `config` (`credit_in_rate`, `credit_out_rate`, `credit_margin`, `credit_monthly_free`, `credit_monthly_pro`) | Sanningen | Läses vid varje anrop i `generate-site`/`edit-element` (`getCreditRates`), i `handle_new_user`, `reset_monthly_counters`, `process_referrals`, `_shared/referral.ts` |
-| `src/lib/credits.js` (`CREDIT_RATES`, `MONTHLY_ALLOWANCE`, `ESTIMATES`) | Hårdkodad kopia | Endast UI: förhandskontroll (knapp inaktiverad), "x / y credits", förbrukningsstapel |
+| DB `config` (`credit_in_rate`, `credit_out_rate`, `credit_margin`, `credit_monthly_free` = 68 000, `credit_monthly_pro` = 680 000) | Sanningen | Edge Functions vid varje anrop, `handle_new_user`, `grant_credits` |
+| `src/lib/credits.js` (`CREDIT_RATES`, `MONTHLY_ALLOWANCE`, estimat) | Hårdkodad kopia (klienter kan inte läsa `config`) | Endast UI: skicka-knappen, "x / y credits", stapeln i Settings. Estimaten måste matcha serverns, annars aktiveras knappen men servern svarar 402. |
 
 ### 4.2 Livscykel
 
-| Steg | Var | Ansvarig kod / tabell / funktion |
+| Steg | Ansvarig kod / funktion | Ledger `action_type` |
 |---|---|---|
-| **Skapas vid signup** | DB-trigger | `handle_new_user()` sätter `profiles.credit_balance = credit_monthly_free` |
-| **Förhandskontroll (klient)** | Chat, Editor | `estimateCredits()` i `src/lib/credits.js` jämfört med `profile.credit_balance`; skicka-knappen inaktiveras om saldot är för lågt |
-| **Förhandskontroll (server)** | `generate-site` | `estimateCredits()` (ny sajt 1 200 in / 8 000 ut; med historik 3 000 in; ändring 15 000 in / 10 000 ut). Saldo < estimat → HTTP 402 `insufficient_credits` innan streaming startar |
-| | `edit-element` | Estimat 500 in / 3 000 ut → 402 vid för lågt saldo |
-| **Dras** | `generate-site` efter lyckad generering | Summerar tokens från klassificering (Haiku) + bygge/ändring + ev. omförsök → `deductCredits()` → RPC `deduct_credits` + insert i `credit_ledger` (`generation` eller `edit`). Sker efter att `generated_sites`-raden sparats. Misslyckas anropet (fel i streamen) dras inget. |
-| | `edit-element` | RPC `deduct_credits` + `credit_ledger` (`element_edit`) |
-| | | Båda anropen är "best effort" – fel sväljs tyst (`.then(null, () => {})`). `deduct_credits` körs med service role; klienten kan inte anropa den. |
-| **Visas** | Chat-header | `profile.credit_balance` / `MONTHLY_ALLOWANCE` (klient) |
-| | Editor-header | `profile.credit_balance` |
-| | Settings | Förbrukningsstapel (`allowance − saldo`), "Credits reset on 1:a nästa månad", tabell med senaste 20 raderna ur `credit_ledger` (läses direkt via RLS) |
-| | Efter generering | `creditsUsed` returneras i SSE-`result` / JSON-svaret; profilen laddas om via `refreshProfile()` |
-| **Återställs** | pg_cron 1:a varje månad | `reset_monthly_counters()` sätter saldo till Pro- eller Free-allowance efter `profiles.plan`. Oanvända krediter rullar inte över. |
-| **Fylls på via värvning** | Vid var 5:e bekräftade värvning | `process_referrals()` (cron, `greatest(saldo, pro)`) eller `confirmReferral()` i `_shared/referral.ts` (direkt från `generate-site`, sätter saldot **till** Pro-allowance) |
-| **Vid uppgradering/nedgradering** | – | Ingenting händer med saldot förrän nästa månadsreset (se 8.2) |
+| **Signup** | `handle_new_user()` sätter saldo = Free-tilldelning | – (ingen rad) |
+| **Uppgradering via Stripe** | `stripe-webhook` → `stripe_apply_checkout` → `grant_credits` | `plan_upgrade` |
+| **Förnyelse via Stripe** (på faktureringsdatum) | `stripe-webhook` (`invoice.paid`, `subscription_cycle`) → `stripe_apply_renewal` → `grant_credits` | `renewal` |
+| **Månadsreset** (1:a, 00:00 UTC) | `reset_monthly_counters()` → `grant_credits` för alla utom aktiva Stripe-prenumeranter. Oanvända credits rullar inte över. | `monthly_reset` |
+| **Värvningsbonus** (var 5:e bekräftade) | `confirm_referral()` (från cron eller `generate-site`) → `grant_credits` | `referral_bonus` |
+| **Manuell rättelse** | Migration som kör `grant_credits(id, 'manual_correction')`. Ändra aldrig saldot direkt i dashboarden. | `manual_correction` |
+| **Nedgradering** | `stripe-webhook` (`customer.subscription.deleted`): `plan = 'free'`. Saldot behålls till nästa månadsreset. Misslyckade betalningar nedgraderar inte (Stripe gör omförsök och skickar sedan `subscription.deleted`). | – |
+| **Avdrag: ny sajt / chatt-ändring** | `generate-site`: (1) klassificering ny/ändring (Haiku), (2) `reserve_credits(estimat)` → 402 om saldot inte räcker, (3) AI-anrop, (4) `settle_credits(verklig kostnad)`, eller vid fel `refund_credits` | `generation` / `edit` |
+| **Avdrag: element-ändring** | `edit-element`: samma reserve → settle/refund | `element_edit` |
+| **Visas** | `AuthProvider` (`src/lib/auth.jsx`) läser `profiles` vid inloggning, fokus på fliken, varje sidbyte och efter varje åtgärd eller fel. Exakt saldo i Chat/Editor/Settings. Settings visar ledgern (senaste 20) med typ, ±förändring och saldo efter. | – |
 
-Leads mäts **inte** i krediter: `scrape-leads` använder `PLAN_LIMITS` i `_shared/auth.ts` (free 10, pro 100 per månad) mot `profiles.leads_used`, som nollställs av samma cron. `generations_used` räknas upp men används bara som statistik.
+**Estimat (server = klient):**
+
+| Åtgärd | Estimat | Verklig kostnad (okt 2026) |
+|---|---|---|
+| Ny sajt | 1 200 in + 2 000 cache write + 10 000 ut ≈ 60 721 (≈ 62 701 med chatthistorik) | 47 000–70 000 |
+| Chatt-ändring | (sajtens tecken / 2,5 + 1 500) in + 3 000 ut ≈ 26 000–35 000 | ~13 000 |
+| Element-ändring | 500 in + 3 000 ut = 17 050 | 250–2 200 |
+
+Chatt-ändringar svarar med SEARCH/REPLACE-block, inte hela sajten. Varje block måste matcha exakt ett ställe, annars avvisas hela ändringen och reservationen återbetalas.
+
+En reservation som aldrig avslutas (funktionen dör) ligger kvar som `reserved`. Användaren har då betalat estimatet, inget mer. Sådana rader hittas med `status = 'reserved'` och gammal `created_at`.
+
+**Leads** mäts inte i credits: `scrape-leads` använder `PLAN_LIMITS` (free 10, pro 100 per månad) efter effektiv plan, mot `profiles.leads_used`, som nollställs av månadsreseten. Google Places-fel (t.ex. `REQUEST_DENIED` när fakturering är avstängd) visas som fel i appen.
 
 ---
 
 ## 5. Betalflödet (Stripe)
 
 ### 5.1 Läge test/live
-`config.stripe_mode` (`test`|`live`) styr vilka secrets `_shared/stripe.ts` använder: `STRIPE_*_LIVE` (obligatoriska i live, inget fallback) eller `STRIPE_*_TEST` (fallback till osuffixade legacy-variabler). `npm run stripe:test|live` (`scripts/stripe-switch.js`) kopierar nycklar från `.env.test`/`.env.live` till lokal `.env` och upsertar `stripe_mode`, `stripe_publishable_key`, `stripe_webhook_secret` i `config` med service role-nyckeln.
+`config.stripe_mode` (`test`|`live`) styr vilka secrets `_shared/stripe.ts` använder: `STRIPE_*_LIVE` (obligatoriska i live, inget fallback) eller `STRIPE_*_TEST`. `npm run stripe:test|live` (`scripts/stripe-switch.js`) kopierar nycklar till lokal `.env` **och skriver `stripe_mode` i live-databasen**. ⚠️ Medan `test` är satt går alla riktiga användares uppgraderingar till Stripes testläge. Växla alltid tillbaka med `npm run stripe:live`.
 
 ### 5.2 Uppgradering
-1. Settings → "Upgrade to Pro" → `callFunction('create-checkout', { origin })`.
-2. `create-checkout`: verifierar JWT, rate limit (10/min per IP och användare), skapar Stripe Checkout-session (`mode=subscription`, Pro-pris, `client_reference_id = user.id`, `metadata.supabase_user_id`, befintlig `customer` eller `customer_email`, promo-koder tillåtna). `success_url = /app/settings?upgraded=true`.
-3. Webbläsaren skickas till Stripe. Efter betalning → tillbaka till Settings, som efter 1,5 s laddar om profilen.
-4. Stripe skickar `checkout.session.completed` till `stripe-webhook`.
+1. Settings → "Upgrade to Pro" → `create-checkout` skapar en Stripe Checkout-session (`mode=subscription`, `client_reference_id = user.id`, befintlig `customer` eller `customer_email`).
+2. Efter betalning → `/app/settings?upgraded=true`, som laddar om profilen.
+3. Stripe skickar `checkout.session.completed` → `stripe_apply_checkout`: Pro + 680 000 credits direkt.
 
 ### 5.3 Webhook (`stripe-webhook`, `verify_jwt = false`)
-- Rate limit 120/min per IP, max 512 kB body.
-- Verifierar `Stripe-Signature` själv (HMAC-SHA256, 300 s tolerans, tidskonstant jämförelse) mot webhook-secret för aktuellt läge.
-- Hanterade händelser:
+- Rate limit 120/min per IP, max 512 kB body. Verifierar `Stripe-Signature` själv (HMAC-SHA256, 300 s tolerans).
+- Stripe-endpoints (live och test) prenumererar på exakt dessa tre händelser (verifierat via Stripe API 2026-10-11):
 
-| Händelse | Effekt i `profiles` |
+| Händelse | Effekt |
 |---|---|
-| `checkout.session.completed` | `plan = 'pro'`, sätter `stripe_customer_id`, `stripe_subscription_id` (matchar på `client_reference_id`) |
-| `customer.subscription.deleted` | `plan = 'free'`, nollar Stripe-id:n (matchar på `stripe_customer_id`) |
+| `checkout.session.completed` | `stripe_apply_checkout`: `plan = 'pro'`, Stripe-id:n, `grant_credits('plan_upgrade')` |
+| `invoice.paid` med `billing_reason = 'subscription_cycle'` | `stripe_apply_renewal`: `grant_credits('renewal')`. Första fakturan (`subscription_create`) ignoreras, den täcks av checkout. |
+| `customer.subscription.deleted` | `plan = 'free'`, nollar Stripe-id:n. Saldot behålls till den 1:a. |
 | Allt annat | Ignoreras, svarar 200 |
 
+- **Idempotens:** varje händelse registreras i `stripe_events` (id = Stripe event-id) i samma transaktion som den tillämpas. En upprepad händelse gör ingenting.
+- **Fel:** alla DB-fel ger 500 och loggas, så att Stripe försöker igen.
+
 ### 5.4 Hantera prenumeration
-Settings → "Manage Billing" (visas för Pro) → `create-portal` → Stripe Billing Portal för `stripe_customer_id`, retur till `/app/settings`. Uppsägning i portalen leder (vid periodens slut) till `customer.subscription.deleted`.
+Settings → "Manage Billing" → `create-portal` → Stripe Billing Portal. Uppsägning leder vid periodens slut till `customer.subscription.deleted`.
 
 ### 5.5 Vid förnyelse
-**Ingenting händer i appen.** Webhooken lyssnar inte på `invoice.paid`, `invoice.payment_failed` eller `customer.subscription.updated`. Pro-användaren behåller `plan = 'pro'` tills Stripe skickar `subscription.deleted`. Krediter fylls på av cron den 1:a varje kalendermånad, oberoende av när faktureringsperioden förnyas.
+Stripe skickar `invoice.paid` (`subscription_cycle`) på faktureringsdatumet. Saldot sätts då till 680 000 och en `renewal`-rad skrivs. Månadsreseten den 1:a hoppar över aktiva Stripe-prenumeranter, så de får exakt en påfyllning per period. Testat med Stripe test clock 2026-10-11.
 
 ---
 
@@ -229,7 +252,7 @@ Alla funktioner utom `stripe-webhook` validerar själva bearer-token med `getUse
 
 | Funktion | verify_jwt i `config.toml` | verify_jwt live | Egen auth | Rate limit |
 |---|---|---|---|---|
-| generate-site | true | **false** | `getUser` | 10/min IP + användare |
+| generate-site | true | true (sedan deploy 2026-10-11) | `getUser` | 10/min IP + användare |
 | edit-element | (ej angiven) | true | `getUser` + ägarkontroll av sajt | delar `generate`-gränsen |
 | scrape-leads | true | true | `getUser` | 20/min |
 | create-checkout | true | true | `getUser` | 10/min |
@@ -288,7 +311,7 @@ Inga värden anges här.
 
 ## 8. Avvikelser och risker som hittades
 
-Status 2026-10-11: punkt 1–3 är åtgärdade av migrationen `20261007200000_lock_down_profiles_and_credit_functions` (körd och verifierad). Övriga punkter är oåtgärdade.
+Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 3b, 10 (delvis), 13, 14, 16.
 
 ### 8.1 Säkerhet
 
@@ -302,18 +325,24 @@ Status 2026-10-11: punkt 1–3 är åtgärdade av migrationen `20261007200000_lo
 
 ### 8.2 Betal- och kreditlogik
 
-4. **Uppgradering ger inte Pro-krediter direkt.** Webhooken sätter bara `plan = 'pro'`; saldot ändras först vid nästa månadsreset. Den som uppgraderar den 2:a får vänta ~4 veckor på sina 680k krediter. Omvänt behåller den som nedgraderas sitt saldo till nästa reset.
-5. **Ingen hantering av förnyelse eller misslyckad betalning** (`invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`). En prenumeration som hamnar i `past_due`/`unpaid` förblir Pro tills Stripe eventuellt raderar den.
-6. **Månadsreset följer kalendermånad (UTC), inte faktureringsperiod.**
-7. **Pro via värvning (`pro_until`) ignoreras på servern.** `reset_monthly_counters`, `scrape-leads` och `generate-site` tittar bara på `plan`. Klienten (`isProUser`) visar Pro och 100 leads, men servern ger 10 leads och återställer till Free-krediter den 1:a. Värvningsbelöningen blir i praktiken en engångspåfyllning.
-8. **Två implementationer av värvningsbekräftelse som beter sig olika:** `process_referrals()` (SQL) har dagstak 10 och använder `greatest(saldo, pro)`; `confirmReferral()` (`_shared/referral.ts`) saknar dagstak, är inte atomisk och *skriver över* saldot med Pro-värdet (kan sänka ett högre saldo).
-9. **Avdrag kan misslyckas tyst** – fel från `deduct_credits`/`credit_ledger` sväljs, så en generering kan bli gratis utan spår. Saldot kan också bli negativt (inget golv; förhandskontrollen är bara ett estimat). Negativa *belopp* avvisas sedan migrationen 2026-10-07.
-10. **Klient och server är redan osynkade:** `credits.js` estimerar ändring med 12 000 output-tokens, servern med 10 000. Settings hårdkodar leadsgränsen (10/100) separat från `PLAN_LIMITS`.
-11. Klassificeringsanropet (Haiku) debiteras med samma satser som huvudmodellen och loggas inte separat (`action_type 'classify'` används aldrig).
+4. ✅ **Åtgärdad** (`stripe_apply_checkout` → `grant_credits('plan_upgrade')`). ~~**Uppgradering ger inte Pro-krediter direkt.**~~ Webhooken sätter bara `plan = 'pro'`; saldot ändras först vid nästa månadsreset. Den som uppgraderar den 2:a får vänta ~4 veckor på sina 680k krediter. Omvänt behåller den som nedgraderas sitt saldo till nästa reset.
+5. ✅ **Åtgärdad** (`invoice.paid` → `renewal`; misslyckad betalning hanteras medvetet via Stripes omförsök + `subscription.deleted`). ~~**Ingen hantering av förnyelse eller misslyckad betalning**~~ (`invoice.paid`, `invoice.payment_failed`, `customer.subscription.updated`). En prenumeration som hamnar i `past_due`/`unpaid` förblir Pro tills Stripe eventuellt raderar den.
+6. ✅ **Åtgärdad för Stripe-prenumeranter** (förnyas på faktureringsdatum; månadsreseten hoppar över dem). Free och Pro utan Stripe följer fortfarande kalendermånaden (UTC), vilket är avsett.
+7. ✅ **Åtgärdad** (`effective_plan` i `grant_credits`/reset, `scrape-leads`, `planLimit`). ~~**Pro via värvning (`pro_until`) ignoreras på servern.**~~ `reset_monthly_counters`, `scrape-leads` och `generate-site` tittar bara på `plan`. Klienten (`isProUser`) visar Pro och 100 leads, men servern ger 10 leads och återställer till Free-krediter den 1:a. Värvningsbelöningen blir i praktiken en engångspåfyllning.
+8. ✅ **Åtgärdad** (en atomisk `confirm_referral` för både cron och `generate-site`). ~~**Två implementationer av värvningsbekräftelse som beter sig olika:**~~ `process_referrals()` (SQL) har dagstak 10 och använder `greatest(saldo, pro)`; `confirmReferral()` (`_shared/referral.ts`) saknar dagstak, är inte atomisk och *skriver över* saldot med Pro-värdet (kan sänka ett högre saldo).
+9. ✅ **Åtgärdad** (reserve → settle/refund, fel loggas; saldot kan bara bli lite negativt om verklig kostnad > estimat, synligt i ledgern). ~~**Avdrag kan misslyckas tyst**~~ – fel från `deduct_credits`/`credit_ledger` sväljs, så en generering kan bli gratis utan spår. Saldot kan också bli negativt (inget golv; förhandskontrollen är bara ett estimat). Negativa *belopp* avvisas sedan migrationen 2026-10-07.
+10. ✅ **Estimaten åtgärdade** (klient = server). Kvar: Settings hårdkodar leadsgränsen (10/100) i stället för `PLAN_LIMITS`, och `MONTHLY_ALLOWANCE` i `credits.js` speglar `config` för hand. ~~**Klient och server är redan osynkade:**~~ `credits.js` estimerar ändring med 12 000 output-tokens, servern med 10 000. Settings hårdkodar leadsgränsen (10/100) separat från `PLAN_LIMITS`.
+11. ✅ **Accepterat:** klassificeringen (några hundra credits) ingår i samma ledger-rad som genereringen/ändringen och syns i dess tokens.
+
+**Hittat och åtgärdat 2026-10-11:**
+
+17. ✅ **Signup var trasig 2026-06-20 – 2026-10-11** ("Database error saving new user"): `handle_new_user()` anropade `gen_random_bytes` utan schema medan pgcrypto ligger i `extensions`. Rättat i `20261011190000`.
+18. ✅ **Chatt-ändringar** skrev om hela sajten (~68k credits, mer än Free-tilldelningen) och klipptes av vid `max_tokens` 10 000 (trasig sajt kunde sparas). Nu SEARCH/REPLACE-block (~13k credits).
+19. ✅ **Leads-sökningen** svalde Google Places-fel (fakturering avstängd gav "0 leads") och kom aldrig förbi sida 1 (Google kräver `query` ihop med `pagetoken`).
 
 ### 8.3 Övrigt
 
-12. `generate-site` har `verify_jwt = true` i `config.toml` men `false` i live. Funktionen validerar token själv, så det är inte en lucka, men konfigurationen och live skiljer sig. Referral-funktionerna och `edit-element` saknas i `config.toml`.
+12. ✅ Löst 2026-10-11 för `generate-site` (live = `config.toml` = true efter deploy). ~~`generate-site` har `verify_jwt = true` i `config.toml` men `false` i live.~~ Funktionen validerar token själv, så det är inte en lucka, men konfigurationen och live skiljer sig. Referral-funktionerna och `edit-element` saknas i `config.toml`.
 13. Duplicate-IP-skyddet i `claim-referral` är svagt: `signup_ip` sätts bara för användare som själva blivit värvade via `claim-referral`, och `clientIp()` tar första värdet i `X-Forwarded-For`, som klienten kan påverka. Detsamma påverkar IP-baserad rate limiting.
 14. `config.stripe_webhook_secret` lagrar en hemlighet i DB som ingen kod läser.
 15. ~~`CLAUDE.md` och arbetsreglerna angav olika rutiner för DB-ändringar.~~ Löst 2026-10-07: migrationsfiler i `supabase/migrations/`, och `schema.sql` är fryst. `CLAUDE.md`, `supabase/README.md` och `schema.sql`-huvudet säger nu samma sak (se avsnitt 2).
