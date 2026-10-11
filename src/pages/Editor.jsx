@@ -276,6 +276,8 @@ export default function Editor() {
       iframeRef.current?.contentWindow?.postMessage({ type: 'DISABLE_EDIT_MODE' }, '*');
       setEditMode(false);
     } catch (err) {
+      // The server may have charged or refunded credits before the error; re-read the balance.
+      refreshProfile();
       setApplyError(err.message || 'Edit failed.');
     } finally {
       setApplying(false);
@@ -302,9 +304,10 @@ export default function Editor() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-bg">
+    <div className="flex flex-col h-screen bg-bg pb-14 md:pb-0">
       {/* ── Navbar ── */}
-      <nav className="h-12 border-b border-border px-4 flex items-center gap-3 shrink-0">
+      <nav className="h-12 border-b border-border shrink-0 overflow-x-auto">
+        <div className="h-full px-4 flex items-center gap-3 min-w-max">
         <button className="btn text-xs" onClick={() => navigate(-1)}>← Back</button>
 
         <div className="h-4 w-px bg-border" />
@@ -390,6 +393,7 @@ export default function Editor() {
         >
           Download
         </button>
+        </div>
       </nav>
 
       {/* ── Preview area ── */}

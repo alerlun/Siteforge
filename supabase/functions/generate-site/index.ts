@@ -63,32 +63,38 @@ function computeCredits(usage: TokenUsage, rates: CreditRates): number {
   return Math.ceil((uncached + cacheWrite + cacheRead + usage.output_tokens * rates.outRate) * rates.margin);
 }
 
-function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean): number {
-  const inputEst  = isEdit ? 15000 : (hasHistory ? 3000 : 1200);
-  const outputEst = isEdit ? 10000 : 8000;
-  return computeCredits({ input_tokens: inputEst, output_tokens: outputEst }, rates);
+// Reserved before the AI call (reserve_credits) and corrected to the real cost afterwards
+// (settle_credits), so the estimate only needs to be close, not exact. Builds observed in
+// June 2026 cost 47k–69k credits (8–12k output tokens + system-prompt cache write), so the
+// build estimate includes a cache write and 10k output tokens.
+// Chat edits send the whole current site and get back only SEARCH/REPLACE blocks.
+// Generated HTML runs ~2.5 characters per token (measured on June–October 2026 sites),
+// plus ~1.5k tokens for the edit prompt and the change request.
+// Keep in sync with estimateCredits() in src/lib/credits.js.
+const EDIT_MAX_OUTPUT_TOKENS = 8000;
+const EDIT_OUTPUT_ESTIMATE = 3000;
+const HTML_CHARS_PER_TOKEN = 2.5;
+const EDIT_PROMPT_OVERHEAD_TOKENS = 1500;
+
+function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean, htmlChars = 0): number {
+  if (isEdit) {
+    return computeCredits({
+      input_tokens: Math.ceil(htmlChars / HTML_CHARS_PER_TOKEN) + EDIT_PROMPT_OVERHEAD_TOKENS,
+      output_tokens: EDIT_OUTPUT_ESTIMATE,
+    }, rates);
+  }
+  return computeCredits({
+    input_tokens: hasHistory ? 3000 : 1200,
+    cache_creation_input_tokens: 2000,
+    output_tokens: 10000,
+  }, rates);
 }
 
-// deno-lint-ignore no-explicit-any
-async function deductCredits(
-  supabase: any,
-  userId: string,
-  totalUsage: TokenUsage,
-  actionType: string,
-  rates: CreditRates,
-  siteId: string | null,
-): Promise<void> {
-  const credits = computeCredits(totalUsage, rates);
-  // Both calls are best-effort: they silently no-op before the migration runs.
-  await supabase.rpc('deduct_credits', { p_user_id: userId, p_credits: credits }).then(null, () => {});
-  await supabase.from('credit_ledger').insert({
-    user_id: userId,
-    action_type: actionType,
-    input_tokens: totalUsage.input_tokens,
-    output_tokens: totalUsage.output_tokens,
-    credits_charged: credits,
-    site_id: siteId ?? null,
-  }).then(null, () => {});
+function addUsage(total: TokenUsage, u: TokenUsage): void {
+  total.input_tokens                += u.input_tokens ?? 0;
+  total.output_tokens               += u.output_tokens ?? 0;
+  total.cache_read_input_tokens      = (total.cache_read_input_tokens     ?? 0) + (u.cache_read_input_tokens     ?? 0);
+  total.cache_creation_input_tokens  = (total.cache_creation_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,6 +289,9 @@ function buildSystemBlocks(lang: LangInfo): [SystemBlock, SystemBlock] {
 // EDIT MODE — refine an existing site from a chat-style instruction
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Edits are returned as SEARCH/REPLACE blocks instead of a full rewritten document:
+// the output is a few hundred to a few thousand tokens instead of ~11k, which makes a
+// chat edit ~3x cheaper and avoids truncating large sites at max_tokens.
 function editSystemPrompt(lang: LangInfo): string {
   return `You are an expert web developer refining an existing single-page business website. You receive the COMPLETE current HTML document and a change request from the site owner. Apply the requested change precisely.
 
@@ -290,11 +299,62 @@ RULES:
 - Apply ONLY what the change request asks. Do not redesign, do not touch unrelated sections, do not "improve" things that were not mentioned.
 - Preserve the existing design style, color palette, fonts, layout structure, and all other content exactly — unless the change request explicitly asks to change them.
 - Keep all visible copy in ${lang.name} (${lang.nativeName}). Only HTML/CSS/JS code is excepted.
-- Keep the document complete and valid — all CSS in <style>, all JS in <script>, no broken tags.
+- Keep the document valid — all CSS in <style>, all JS in <script>, no broken tags.
 - Do NOT introduce emojis anywhere, even if the change request seems to suggest them.
 - If the request is vague, make the smallest reasonable change that satisfies it.
 
-Return the COMPLETE updated HTML document, starting with <!DOCTYPE html>. No markdown, no code fences, no explanation before or after.`;
+OUTPUT FORMAT — do NOT return the whole document. Return only one or more edit blocks:
+
+<<<<<<< SEARCH
+(an exact, contiguous excerpt of the current HTML, copied character for character)
+=======
+(the text that replaces that excerpt)
+>>>>>>> REPLACE
+
+- Each SEARCH excerpt must appear EXACTLY ONCE in the current HTML. Include enough surrounding lines to make it unique, but keep it short.
+- To add something, SEARCH for the line next to where it goes and REPLACE it with that line plus the new content.
+- To delete something, leave the REPLACE part empty.
+- Use as many blocks as needed, in document order, and never let two blocks overlap.
+- Nothing before, between or after the blocks: no explanation, no markdown, no code fences.`;
+}
+
+const EDIT_BLOCK_RE = /<<<<<<< SEARCH\r?\n([\s\S]*?)\r?\n=======\r?\n([\s\S]*?)\r?\n?>>>>>>> REPLACE/g;
+
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + needle.length)) count++;
+  return count;
+}
+
+// Applies SEARCH/REPLACE blocks to the document. Every block must match exactly once;
+// otherwise the whole edit is rejected (the caller refunds the reserved credits) rather
+// than saving a half-applied or wrongly applied change.
+function applyEditBlocks(html: string, modelText: string): string {
+  const blocks = [...modelText.matchAll(EDIT_BLOCK_RE)].map((m) => ({ search: m[1], replace: m[2] }));
+  if (!blocks.length) throw editFailed('The model returned no edit blocks.');
+  let out = html;
+  for (const [i, b] of blocks.entries()) {
+    let search = b.search;
+    let n = countOccurrences(out, search);
+    if (n === 0 && search.trim() && search.trim() !== search) {
+      // Tolerate leading/trailing whitespace differences around the excerpt.
+      search = search.trim();
+      n = countOccurrences(out, search);
+    }
+    if (n !== 1) {
+      throw editFailed(`Edit block ${i + 1} of ${blocks.length} ${n === 0 ? 'did not match the current site' : `matched ${n} places`}.`);
+    }
+    out = out.replace(search, () => b.replace);
+  }
+  return out;
+}
+
+function editFailed(detail: string): Error {
+  // deno-lint-ignore no-explicit-any
+  const e: any = new Error('edit_failed');
+  e.detail = detail;
+  e.status = 502;
+  return e;
 }
 
 // Decide whether a chat message is an edit to the current site or a request for a new one.
@@ -465,12 +525,32 @@ Deno.serve(async (req) => {
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
 
-    const fallbackBalance = profile.plan === 'pro' ? rates.monthlyPro : rates.monthlyFree;
-    const estimate = estimateCredits(rates, hasExistingSite, Array.isArray(history) && history.length > 0);
-    const currentBalance: number = (profile.credit_balance != null) ? Number(profile.credit_balance) : fallbackBalance;
-    if (currentBalance < estimate) {
+    // Edit-vs-new: if a site already exists in this chat, a small model decides per
+    // message. Done before the reservation so the right action is reserved (an edit costs
+    // ~1/3 of a new build). Its tokens are added to the settled total below.
+    const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
+    let isEditMode = false;
+    if (hasExistingSite) {
+      try {
+        const result = await classifyEditRequest(apiKey, prompt);
+        isEditMode = result.isEdit;
+        addUsage(totalUsage, result.usage);
+      } catch { isEditMode = false; }
+    }
+
+    // Atomically withhold the estimate before the main AI call. NULL = balance too low.
+    // Settled to the real cost on success, refunded on failure (see the stream below).
+    const estimate = estimateCredits(
+      rates, isEditMode, Array.isArray(history) && history.length > 0,
+      isEditMode ? (currentHtml as string).length : 0,
+    );
+    const { data: reservationId, error: reserveErr } = await supabase.rpc('reserve_credits', {
+      p_user_id: user.id, p_amount: estimate, p_action: isEditMode ? 'edit' : 'generation',
+    });
+    if (reserveErr) throw new Error(`reserve_credits: ${reserveErr.message}`);
+    if (!reservationId) {
       return new Response(
-        JSON.stringify({ error: 'insufficient_credits', balance: currentBalance, estimate }),
+        JSON.stringify({ error: 'insufficient_credits', balance: Number(profile.credit_balance ?? 0), estimate }),
         { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
@@ -486,42 +566,28 @@ Deno.serve(async (req) => {
     const hb = setInterval(() => { sse({ type: 'heartbeat' }); }, 5_000);
 
     (async () => {
+      let settled = false;
       try {
-        const totalUsage: TokenUsage = { input_tokens: 0, output_tokens: 0 };
-        let isEditMode = false;
         let html = '';
         let retried = false;
         let edited = false;
-
-        // Edit-vs-new: if a site already exists in this chat, the AI decides per message.
-        if (hasExistingSite) {
-          try {
-            const result = await classifyEditRequest(apiKey, prompt);
-            isEditMode = result.isEdit;
-            totalUsage.input_tokens  += result.usage.input_tokens;
-            totalUsage.output_tokens += result.usage.output_tokens;
-          } catch { isEditMode = false; }
-        }
 
         if (isEditMode) {
           // ── EDIT MODE: refine the existing site from a chat instruction ────
           const { text: editRaw, usage: editUsage } = await callClaude(apiKey, [
             { role: 'system', content: editSystemPrompt(lang) },
             { role: 'user', content: `CURRENT HTML:\n${currentHtml}\n\nCHANGE REQUEST:\n${prompt}` },
-          ], 0.4, 10000);
-          totalUsage.input_tokens  += editUsage.input_tokens;
-          totalUsage.output_tokens += editUsage.output_tokens;
-          const editedHtml = extractHtml(editRaw);
-          if (editedHtml && /<!DOCTYPE\s+html/i.test(editedHtml) && editedHtml.length > 5000) {
-            html = editedHtml;
-            edited = true;
-          } else {
-            // deno-lint-ignore no-explicit-any
-            const e: any = new Error('edit_failed');
-            e.detail = 'Model returned an incomplete document.';
-            e.status = 502;
-            throw e;
+          ], 0.2, EDIT_MAX_OUTPUT_TOKENS);
+          addUsage(totalUsage, editUsage);
+          if (editUsage.output_tokens >= EDIT_MAX_OUTPUT_TOKENS) {
+            throw editFailed('The change was too large to apply in one step. Try splitting it into smaller requests.');
           }
+          const editedHtml = applyEditBlocks(currentHtml as string, editRaw);
+          if (!/<!DOCTYPE\s+html/i.test(editedHtml) || !/<\/html>/i.test(editedHtml)) {
+            throw editFailed('The edit would have broken the document structure.');
+          }
+          html = editedHtml;
+          edited = true;
         } else {
           // ── BUILD: generate the website directly from the business info ────
           const buildUserMessage = `${businessInfoBlock}\n\n${prompt}`;
@@ -535,10 +601,7 @@ Deno.serve(async (req) => {
           buildMessages.push({ role: 'user', content: buildUserMessage });
 
           const { text: raw, usage: buildUsage } = await callClaude(apiKey, buildMessages, 1.0, 12000, sysBlocks);
-          totalUsage.input_tokens                  += buildUsage.input_tokens;
-          totalUsage.output_tokens                 += buildUsage.output_tokens;
-          totalUsage.cache_read_input_tokens        = (totalUsage.cache_read_input_tokens    ?? 0) + (buildUsage.cache_read_input_tokens    ?? 0);
-          totalUsage.cache_creation_input_tokens    = (totalUsage.cache_creation_input_tokens ?? 0) + (buildUsage.cache_creation_input_tokens ?? 0);
+          addUsage(totalUsage, buildUsage);
           html = extractHtml(raw);
 
           if (isSkeletalOutput(html)) {
@@ -549,10 +612,7 @@ Deno.serve(async (req) => {
               { role: 'user', content: 'That output was incomplete or broken. Rebuild the website as one complete, valid HTML document, starting with <!DOCTYPE html> and ending with </html>. Raw HTML only — no markdown, no code fences.' },
             ];
             const { text: retryRaw, usage: retryUsage } = await callClaude(apiKey, retryMessages, 1.0, 12000, sysBlocks);
-            totalUsage.input_tokens                += retryUsage.input_tokens;
-            totalUsage.output_tokens               += retryUsage.output_tokens;
-            totalUsage.cache_read_input_tokens      = (totalUsage.cache_read_input_tokens    ?? 0) + (retryUsage.cache_read_input_tokens    ?? 0);
-            totalUsage.cache_creation_input_tokens  = (totalUsage.cache_creation_input_tokens ?? 0) + (retryUsage.cache_creation_input_tokens ?? 0);
+            addUsage(totalUsage, retryUsage);
             const retryHtml = extractHtml(retryRaw);
             if (retryHtml && /<!DOCTYPE\s+html/i.test(retryHtml) && retryHtml.length > 4000) html = retryHtml;
           }
@@ -583,11 +643,25 @@ Deno.serve(async (req) => {
         }).select().single();
         if (siteErr) throw new Error(siteErr.message);
 
-        // Increment the legacy counter (kept for stats) and deduct credits.
+        // Settle the reservation to the real cost (balance + ledger in one transaction).
+        // The site exists at this point, so a settle failure is logged rather than
+        // turned into a user-facing error; the reservation then stays 'reserved' and
+        // the user has paid the estimate.
+        const creditsUsed = computeCredits(totalUsage, rates);
+        const { error: settleErr } = await supabase.rpc('settle_credits', {
+          p_ledger_id: reservationId,
+          p_credits: creditsUsed,
+          p_input_tokens: totalUsage.input_tokens,
+          p_output_tokens: totalUsage.output_tokens,
+          p_cache_write_tokens: totalUsage.cache_creation_input_tokens ?? 0,
+          p_cache_read_tokens: totalUsage.cache_read_input_tokens ?? 0,
+          p_site_id: site.id,
+        });
+        if (settleErr) console.error('[generate-site] settle_credits failed:', reservationId, settleErr.message);
+        else settled = true;
+
+        // Legacy counter, kept for stats only.
         await supabase.from('profiles').update({ generations_used: (profile.generations_used ?? 0) + 1 }).eq('id', user.id);
-        const actionType = isEditMode ? 'edit' : 'generation';
-        await deductCredits(supabase, user.id, totalUsage, actionType, rates, site.id);
-        const creditsUsed = Number(computeCredits(totalUsage, rates));
 
         // Fire-and-forget referral check — never block the SSE result.
         void checkReferralActivation(supabase, user.id).catch(() => {});
@@ -599,6 +673,11 @@ Deno.serve(async (req) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[generate-site] IIFE error:', msg);
+        // The AI call or saving failed: give the reserved estimate back.
+        if (!settled) {
+          const { error: refundErr } = await supabase.rpc('refund_credits', { p_ledger_id: reservationId });
+          if (refundErr) console.error('[generate-site] refund_credits failed:', reservationId, refundErr.message);
+        }
         // deno-lint-ignore no-explicit-any
         const e = err as any;
         await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });

@@ -4,7 +4,7 @@ import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
 import { nextResetDate, formatDate } from '../lib/utils.js';
-import { formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
+import { formatCredits, formatCreditDelta, LEDGER_LABELS, MONTHLY_ALLOWANCE } from '../lib/credits.js';
 import { getReferralStats, generateReferralCode } from '../lib/referral.js';
 
 export default function Settings() {
@@ -148,8 +148,8 @@ export default function Settings() {
           </div>
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
             <UsageBar
-              label="CREDITS"
-              used={monthlyAllowance - creditBalance}
+              label="CREDITS LEFT"
+              used={creditBalance}
               limit={monthlyAllowance}
               formatValue={formatCredits}
             />
@@ -161,7 +161,7 @@ export default function Settings() {
         </div>
 
         <div className="card">
-          <div className="px-5 py-4 border-b border-border label">credit usage (last 20)</div>
+          <div className="px-5 py-4 border-b border-border label">credit history (last 20)</div>
           {ledgerLoading ? (
             <div className="p-4 font-mono text-xs text-muted">loading…</div>
           ) : ledger.length === 0 ? (
@@ -176,18 +176,27 @@ export default function Settings() {
                   <th>Input</th>
                   <th>Output</th>
                   <th>Credits</th>
+                  <th>Balance</th>
                 </tr>
               </thead>
               <tbody>
-                {ledger.map((row) => (
-                  <tr key={row.id}>
-                    <td className="font-mono text-muted">{formatDate(row.created_at)}</td>
-                    <td className="font-mono">{row.action_type}</td>
-                    <td className="font-mono text-muted">{row.input_tokens.toLocaleString()}</td>
-                    <td className="font-mono text-muted">{row.output_tokens.toLocaleString()}</td>
-                    <td className="font-mono">{formatCredits(row.credits_charged)}</td>
-                  </tr>
-                ))}
+                {ledger.map((row) => {
+                  // delta is signed (top-ups positive); rows before 2026-10-11 may lack it.
+                  const delta = row.delta ?? -row.credits_charged;
+                  const hasTokens = row.input_tokens > 0 || row.output_tokens > 0;
+                  const statusNote = row.status === 'refunded' ? ' (refunded)'
+                    : row.status === 'reserved' ? ' (in progress)' : '';
+                  return (
+                    <tr key={row.id}>
+                      <td className="font-mono text-muted">{formatDate(row.created_at)}</td>
+                      <td className="font-mono">{(LEDGER_LABELS[row.action_type] ?? row.action_type) + statusNote}</td>
+                      <td className="font-mono text-muted">{hasTokens ? row.input_tokens.toLocaleString() : '—'}</td>
+                      <td className="font-mono text-muted">{hasTokens ? row.output_tokens.toLocaleString() : '—'}</td>
+                      <td className={`font-mono ${delta > 0 ? 'text-accent' : ''}`}>{formatCreditDelta(delta)}</td>
+                      <td className="font-mono text-muted">{formatCredits(row.balance_after)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             </div>
@@ -308,7 +317,7 @@ export default function Settings() {
 
 function UsageBar({ label, used, limit, formatValue }) {
   const fmt = formatValue ?? ((n) => n);
-  const pct = Math.min(100, limit ? (used / limit) * 100 : 0);
+  const pct = Math.max(0, Math.min(100, limit ? (used / limit) * 100 : 0));
   return (
     <div className="border border-border p-3">
       <div className="flex items-center justify-between font-mono text-xs">

@@ -1,4 +1,6 @@
-// stripe-webhook — verifies signature, updates profiles on subscription events.
+// stripe-webhook — verifies signature, updates plan/credits on subscription events.
+// Handled: checkout.session.completed, invoice.paid (subscription_cycle),
+// customer.subscription.deleted. The Stripe endpoint must be subscribed to all three.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
@@ -89,25 +91,40 @@ Deno.serve(async (req) => {
 
   const supabase = adminClient();
 
+  // supabase-js returns { error } instead of throwing. Any DB error must surface as a
+  // non-2xx response so Stripe retries the event; the RPCs are idempotent per event id.
   try {
     if (event.type === 'checkout.session.completed') {
+      // Upgrade: plan = 'pro' + top up to the Pro allowance (stripe_apply_checkout).
       const session = event.data.object;
       const userId = session.client_reference_id ?? session.metadata?.supabase_user_id;
       if (userId) {
-        await supabase
-          .from('profiles')
-          .update({
-            plan: 'pro',
-            stripe_customer_id: session.customer ?? null,
-            stripe_subscription_id: session.subscription ?? null,
-          })
-          .eq('id', userId);
+        const { error } = await supabase.rpc('stripe_apply_checkout', {
+          p_event_id: event.id,
+          p_user_id: userId,
+          p_customer_id: session.customer ?? null,
+          p_subscription_id: session.subscription ?? null,
+        });
+        if (error) throw new Error(`stripe_apply_checkout: ${error.message}`);
+      }
+    } else if (event.type === 'invoice.paid') {
+      // Renewal: top up for the new billing period. The first invoice of a subscription
+      // ('subscription_create') is already covered by checkout.session.completed.
+      const invoice = event.data.object;
+      if (invoice.billing_reason === 'subscription_cycle' && invoice.customer) {
+        const { error } = await supabase.rpc('stripe_apply_renewal', {
+          p_event_id: event.id,
+          p_customer_id: invoice.customer,
+        });
+        if (error) throw new Error(`stripe_apply_renewal: ${error.message}`);
       }
     } else if (event.type === 'customer.subscription.deleted') {
+      // Downgrade. The remaining balance is kept until the next monthly reset.
+      // Failed payments are not handled: Stripe retries, then sends this event.
       const sub = event.data.object;
       const customerId = sub.customer;
       if (customerId) {
-        await supabase
+        const { error } = await supabase
           .from('profiles')
           .update({
             plan: 'free',
@@ -115,9 +132,11 @@ Deno.serve(async (req) => {
             stripe_subscription_id: null,
           })
           .eq('stripe_customer_id', customerId);
+        if (error) throw new Error(`downgrade: ${error.message}`);
       }
     }
   } catch (err) {
+    console.error('[stripe-webhook]', event.type, event.id, err);
     return fromHttpError(err);
   }
 

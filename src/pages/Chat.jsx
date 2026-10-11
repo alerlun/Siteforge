@@ -4,7 +4,7 @@ import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
 import { downloadHtml } from '../lib/utils.js';
-import { estimateCredits, formatCredits, MONTHLY_ALLOWANCE } from '../lib/credits.js';
+import { estimateCredits, formatCredits, formatCreditsShort, MONTHLY_ALLOWANCE } from '../lib/credits.js';
 import SaleModal from '../components/SaleModal.jsx';
 import SessionsPanel from '../components/SessionsPanel.jsx';
 
@@ -52,7 +52,11 @@ export default function Chat() {
   const creditBalance = profile?.credit_balance ?? 0;
   const isPro = isProUser(profile);
   const monthlyAllowance = MONTHLY_ALLOWANCE[isPro ? 'pro' : 'free'];
-  const genEstimate = estimateCredits(html ? 'edit' : 'generation');
+  // With a site on screen the message is usually an edit; the server classifies it and
+  // answers 402 if it turns out to be a (more expensive) new build the balance can't cover.
+  const genEstimate = html
+    ? estimateCredits('edit', html.length)
+    : estimateCredits(messages.length > 0 ? 'generationWithHistory' : 'generation');
   const canGenerate = creditBalance >= genEstimate;
   const planLabel = isPro ? '[PRO]' : '[FREE]';
 
@@ -250,6 +254,8 @@ export default function Chat() {
       // On mobile, jump to preview after generation completes.
       if (isMobile) setMobileTab('preview');
     } catch (err) {
+      // The server may have charged or refunded credits before the error; re-read the balance.
+      refreshProfile();
       if (err.status === 402) {
         setLimitHit(true);
       } else {
@@ -324,7 +330,7 @@ export default function Chat() {
               onClick={() => navigate('/app/settings')}
               title={`${formatCredits(creditBalance)} / ${formatCredits(monthlyAllowance)} credits remaining`}
             >
-              {isMobile ? formatCredits(creditBalance) : `Credits: ${formatCredits(creditBalance)}`}
+              {isMobile ? formatCreditsShort(creditBalance) : `Credits: ${formatCredits(creditBalance)}`}
             </button>
           </div>
         </header>

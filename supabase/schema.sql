@@ -1,5 +1,7 @@
--- SiteForge schema
--- Run in Supabase SQL editor.
+-- SiteForge schema — FROZEN BASELINE (2026-10-07). Do not edit.
+-- Matches the live database as of 2026-10-07. All later changes go in
+-- supabase/migrations/<YYYYMMDDHHMMSS>_<name>.sql (reviewed before applying).
+-- Current schema = this file + every migration in supabase/migrations/, in order.
 
 create extension if not exists "pgcrypto";
 create extension if not exists "pg_cron";

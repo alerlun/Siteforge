@@ -108,37 +108,52 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (siteErr || !site) return errorResponse(404, 'site_not_found');
 
-    // Pre-flight credit check (conservative: ~500 input + 3000 output).
-    const rates = await getCreditRates(supabase);
-    const { data: profile } = await supabase.from('profiles').select('credit_balance').eq('id', user.id).single();
-    const balance = Number(profile?.credit_balance ?? 0);
-    const estimate = computeCredits({ input_tokens: 500, output_tokens: 3000 }, rates);
-    if (balance < estimate) {
-      return errorResponse(402, 'insufficient_credits', { balance, estimate });
-    }
-
     const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
     if (!apiKey) return errorResponse(500, 'ANTHROPIC_API_KEY not configured');
+
+    // Atomically withhold the estimate (~500 input + 3000 output) before the AI call.
+    // NULL = balance too low. Settled to the real cost on success, refunded on failure.
+    const rates = await getCreditRates(supabase);
+    const estimate = computeCredits({ input_tokens: 500, output_tokens: 3000 }, rates);
+    const { data: reservationId, error: reserveErr } = await supabase.rpc('reserve_credits', {
+      p_user_id: user.id, p_amount: estimate, p_action: 'element_edit',
+    });
+    if (reserveErr) throw new Error(`reserve_credits: ${reserveErr.message}`);
+    if (!reservationId) {
+      const { data: profile } = await supabase.from('profiles').select('credit_balance').eq('id', user.id).single();
+      return errorResponse(402, 'insufficient_credits', { balance: Number(profile?.credit_balance ?? 0), estimate });
+    }
 
     const pathNote = elementPath ? `\nLOCATION (CSS path): ${elementPath}` : '';
     const userContent = `CURRENT ELEMENT:${pathNote}\n${elementHtml}\n\nCHANGE REQUEST:\n${instruction}`;
 
-    const { text: updatedHtml, usage } = await callClaude(apiKey, SYSTEM_PROMPT, userContent);
+    let updatedHtml: string;
+    let usage: TokenUsage;
+    try {
+      ({ text: updatedHtml, usage } = await callClaude(apiKey, SYSTEM_PROMPT, userContent));
+    } catch (err) {
+      // The AI call failed: give the reserved estimate back.
+      const { error: refundErr } = await supabase.rpc('refund_credits', { p_ledger_id: reservationId });
+      if (refundErr) console.error('[edit-element] refund_credits failed:', reservationId, refundErr.message);
+      throw err;
+    }
 
-    // Deduct credits and log (best-effort: schema may not be applied yet).
+    // Settle to the real cost (balance + ledger in one transaction). The edit is done,
+    // so a settle failure is logged, not returned; the user has then paid the estimate.
     const credits = computeCredits(usage, rates);
-    await supabase.rpc('deduct_credits', { p_user_id: user.id, p_credits: credits }).then(null, () => {});
-    await supabase.from('credit_ledger').insert({
-      user_id: user.id,
-      action_type: 'element_edit',
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      credits_charged: Number(credits),
-      site_id: siteId,
-    }).then(null, () => {});
+    const { error: settleErr } = await supabase.rpc('settle_credits', {
+      p_ledger_id: reservationId,
+      p_credits: credits,
+      p_input_tokens: usage.input_tokens,
+      p_output_tokens: usage.output_tokens,
+      p_cache_write_tokens: 0,
+      p_cache_read_tokens: 0,
+      p_site_id: siteId,
+    });
+    if (settleErr) console.error('[edit-element] settle_credits failed:', reservationId, settleErr.message);
 
     return new Response(
-      JSON.stringify({ updatedHtml, creditsUsed: Number(credits) }),
+      JSON.stringify({ updatedHtml, creditsUsed: credits }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {

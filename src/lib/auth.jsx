@@ -1,5 +1,10 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { supabase } from './supabase.js';
+
+// Background refreshes (tab focus, route change) are skipped if the profile was
+// loaded less than this long ago.
+const REFRESH_THROTTLE_MS = 2000;
 
 const AuthCtx = createContext({
   user: null,
@@ -14,19 +19,27 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Each load gets a sequence number; only the newest response is applied, so a slow
+  // older request can't overwrite a newer balance.
+  const loadSeq = useRef(0);
+  const lastLoadAt = useRef(0);
+
   const loadProfile = useCallback(async (uid) => {
+    const seq = ++loadSeq.current;
     if (!uid) {
       setProfile(null);
       return;
     }
+    lastLoadAt.current = Date.now();
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', uid)
       .maybeSingle();
+    if (seq !== loadSeq.current) return;
     if (error) {
+      // Keep the last known profile on a transient error instead of showing 0 credits.
       console.error('[auth] profile load failed', error);
-      setProfile(null);
     } else {
       setProfile(data);
     }
@@ -55,8 +68,29 @@ export function AuthProvider({ children }) {
     if (user?.id) await loadProfile(user.id);
   }, [user, loadProfile]);
 
+  // The balance changes outside this tab (monthly reset, Stripe webhook, other tabs,
+  // dashboard edits). Re-read it when the tab regains focus and on every route change.
+  const backgroundRefresh = useCallback(() => {
+    if (!user?.id || Date.now() - lastLoadAt.current < REFRESH_THROTTLE_MS) return;
+    loadProfile(user.id);
+  }, [user, loadProfile]);
+
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') backgroundRefresh(); };
+    window.addEventListener('focus', backgroundRefresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener('focus', backgroundRefresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [backgroundRefresh]);
+
+  const { pathname } = useLocation();
+  useEffect(() => { backgroundRefresh(); }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const signOut = useCallback(async () => {
     await supabase.auth.signOut();
+    loadSeq.current++; // drop any profile load still in flight
     setUser(null);
     setProfile(null);
   }, []);
