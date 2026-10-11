@@ -12,76 +12,37 @@ export async function checkReferralActivation(
   supabase: any,
   userId: string,
 ): Promise<void> {
-  const { data: activation } = await supabase
+  const { data: activation, error } = await supabase
     .from('referral_activations')
-    .select('id, created_at, referrer_id, first_generation_at')
+    .select('id, created_at, first_generation_at')
     .eq('referred_id', userId)
     .eq('status', 'pending')
     .maybeSingle();
+  if (error) {
+    console.error('[referral] activation lookup failed:', userId, error.message);
+    return;
+  }
 
   if (!activation) return;
   if (activation.first_generation_at) return; // already marked on a previous generation
 
   const now = new Date();
 
-  await supabase
+  const { error: markErr } = await supabase
     .from('referral_activations')
     .update({ first_generation_at: now.toISOString() })
     .eq('id', activation.id);
+  if (markErr) {
+    console.error('[referral] marking first generation failed:', activation.id, markErr.message);
+    return;
+  }
 
   const accountAge = now.getTime() - new Date(activation.created_at).getTime();
   if (accountAge >= TWENTY_FOUR_HOURS_MS) {
-    await confirmReferral(supabase, activation.id, activation.referrer_id);
+    // Same atomic DB function the cron uses: confirms once, enforces the daily cap,
+    // and grants the milestone reward via grant_credits (with a ledger row).
+    const { error: confirmErr } = await supabase.rpc('confirm_referral', { p_activation_id: activation.id });
+    if (confirmErr) console.error('[referral] confirm_referral failed:', activation.id, confirmErr.message);
   }
   // else: cron will confirm it once 24h has elapsed
-}
-
-/**
- * Marks an activation as confirmed and updates the referrer's count + milestone.
- * Grants pro_until extension and credit top-up if a 5-referral milestone is hit.
- */
-export async function confirmReferral(
-  supabase: any,
-  activationId: string,
-  referrerId: string,
-): Promise<void> {
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('referral_count, referral_milestone, pro_until')
-    .eq('id', referrerId)
-    .single();
-
-  if (!profile) return;
-
-  await supabase
-    .from('referral_activations')
-    .update({ status: 'confirmed', confirmed_at: new Date().toISOString() })
-    .eq('id', activationId);
-
-  const newCount = (profile.referral_count ?? 0) + 1;
-  const lastMilestone = profile.referral_milestone ?? 0;
-  const earnedMilestone = Math.floor(newCount / 5) * 5;
-
-  const update: Record<string, unknown> = { referral_count: newCount };
-
-  if (earnedMilestone > lastMilestone) {
-    update.referral_milestone = earnedMilestone;
-    const base =
-      profile.pro_until && new Date(profile.pro_until) > new Date()
-        ? new Date(profile.pro_until)
-        : new Date();
-    base.setMonth(base.getMonth() + 1);
-    update.pro_until = base.toISOString();
-
-    // Top up credits to Pro level immediately when milestone is earned.
-    const { data: cfg } = await supabase
-      .from('config')
-      .select('value')
-      .eq('key', 'credit_monthly_pro')
-      .single();
-    const proCredits = parseInt(cfg?.value ?? '680000', 10);
-    update.credit_balance = proCredits;
-  }
-
-  await supabase.from('profiles').update(update).eq('id', referrerId);
 }
