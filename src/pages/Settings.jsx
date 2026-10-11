@@ -148,8 +148,8 @@ export default function Settings() {
           </div>
           <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-3">
             <UsageBar
-              label="CREDITS"
-              used={monthlyAllowance - creditBalance}
+              label="CREDITS LEFT"
+              used={creditBalance}
               limit={monthlyAllowance}
               formatValue={formatCredits}
             />
@@ -308,7 +308,7 @@ export default function Settings() {
 
 function UsageBar({ label, used, limit, formatValue }) {
   const fmt = formatValue ?? ((n) => n);
-  const pct = Math.min(100, limit ? (used / limit) * 100 : 0);
+  const pct = Math.max(0, Math.min(100, limit ? (used / limit) * 100 : 0));
   return (
     <div className="border border-border p-3">
       <div className="flex items-center justify-between font-mono text-xs">

@@ -250,6 +250,8 @@ export default function Chat() {
       // On mobile, jump to preview after generation completes.
       if (isMobile) setMobileTab('preview');
     } catch (err) {
+      // The server may have charged or refunded credits before the error; re-read the balance.
+      refreshProfile();
       if (err.status === 402) {
         setLimitHit(true);
       } else {

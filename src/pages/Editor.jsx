@@ -276,6 +276,8 @@ export default function Editor() {
       iframeRef.current?.contentWindow?.postMessage({ type: 'DISABLE_EDIT_MODE' }, '*');
       setEditMode(false);
     } catch (err) {
+      // The server may have charged or refunded credits before the error; re-read the balance.
+      refreshProfile();
       setApplyError(err.message || 'Edit failed.');
     } finally {
       setApplying(false);
