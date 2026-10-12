@@ -232,7 +232,9 @@ export default function Editor() {
   // Listen for element selection from iframe.
   useEffect(() => {
     function onMessage(e) {
-      if (e.data?.type === 'ELEMENT_SELECTED') {
+      // Only the preview iframe may select elements, not other windows or popups.
+      if (!iframeRef.current || e.source !== iframeRef.current.contentWindow) return;
+      if (e.data?.type === 'ELEMENT_SELECTED' && typeof e.data.outerHtml === 'string') {
         setSelectedEl({ outerHtml: e.data.outerHtml, path: e.data.path });
         setInstruction('');
         setApplyError('');

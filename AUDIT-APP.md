@@ -201,7 +201,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | L8 | Säkerhet | `create-checkout/index.ts:24`, `create-portal/index.ts:24` | `origin` från klienten används som `success_url`/`return_url` (öppen redirect via Stripe). | Använd en fast `APP_URL` från secrets. |
 | L9 | Säkerhet | `_shared/guards.ts:18-22`, `scrape-leads/index.ts:173`, `generate-site/index.ts:440`, `:685` | Interna felmeddelanden (DB-fel, Anthropics svarstext) skickas till klienten. | Logga detaljer server-side och skicka en felkod till klienten. |
 | L10 | Säkerhet | `claim-referral`, `generate-referral-code`, `referral-stats` | Ingen rate limit. `claim-referral:37` fångar inte `HttpError` från `readBoundedJson` (ger 500). | Lägg till `enforce()` och try/catch med `fromHttpError`. |
-| L11 | Säkerhet | `src/pages/Editor.jsx:181-191` | `message`-lyssnaren kontrollerar inte `e.source === iframe.contentWindow`. | Lägg till kontrollen. |
+| L11 | Säkerhet | `src/pages/Editor.jsx:181-191` | `message`-lyssnaren kontrollerar inte `e.source === iframe.contentWindow`. | Lägg till kontrollen. **Åtgärdat 2026-10-12** (även typkontroll av `outerHtml`). |
 | L12 | Bugg | `src/pages/Editor.jsx:259` | `html.replace(str, updatedHtml)` tolkar `$&`, `` $` ``, `$'` i AI-svaret som specialmönster. | Använd `html.replace(str, () => updatedHtml)`. **Åtgärdat 2026-10-12.** |
 | L13 | Säkerhet | `src/pages/Leads.jsx:128-139` | CSV-export utan skydd mot formel-injektion (företagsnamn som börjar med `=`, `+`, `-`, `@`). | `Papa.unparse(rows, { escapeFormulae: true })`. |
 | L14 | Säkerhet | Supabase Auth (rådgivare) | Skydd mot läckta lösenord (HaveIBeenPwned) är avstängt; minsta lösenordslängd är 6 (`Signup.jsx:70`). | Slå på i dashboarden och höj till minst 8. |
