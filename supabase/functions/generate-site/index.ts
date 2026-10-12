@@ -532,6 +532,21 @@ Deno.serve(async (req) => {
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
 
+    // Without enough credits for even the cheaper action, stop before the classifier:
+    // it costs tokens too and used to run for free at a zero balance (AUDIT-APP.md L2).
+    const historyChars = (history ?? []).reduce((n, m) => n + m.content.length, 0);
+    const cheapestEstimate = Math.min(
+      estimateCredits(rates, false, historyChars),
+      hasExistingSite ? estimateCredits(rates, true, historyChars, (currentHtml as string).length) : Infinity,
+    );
+    const balance = Number(profile.credit_balance ?? 0);
+    if (balance < cheapestEstimate) {
+      return new Response(
+        JSON.stringify({ error: 'insufficient_credits', balance, estimate: cheapestEstimate }),
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     // Edit-vs-new: if a site already exists in this chat, a small model decides per
     // message. Done before the reservation so the right action is reserved (an edit costs
     // ~1/3 of a new build). Its tokens are added to the settled total below.
@@ -547,7 +562,6 @@ Deno.serve(async (req) => {
 
     // Atomically withhold the estimate before the main AI call. NULL = balance too low.
     // Settled to the real cost on success, refunded on failure (see the stream below).
-    const historyChars = (history ?? []).reduce((n, m) => n + m.content.length, 0);
     const estimate = estimateCredits(
       rates, isEditMode, historyChars,
       isEditMode ? (currentHtml as string).length : 0,
