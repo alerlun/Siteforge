@@ -59,11 +59,11 @@ export default function ResetPassword() {
           <form onSubmit={onSubmit} className="space-y-4">
             <div>
               <div className="label mb-1">New password</div>
-              <input className="input" type="password" required minLength={6} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <input className="input" type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
             <div>
               <div className="label mb-1">Confirm password</div>
-              <input className="input" type="password" required minLength={6} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+              <input className="input" type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
             </div>
             {err && <div className="font-mono text-xs text-accent">{err}</div>}
             <button className="btn-primary w-full" disabled={busy}>{busy ? 'saving…' : 'Save Password'}</button>

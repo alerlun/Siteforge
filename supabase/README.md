@@ -55,6 +55,7 @@ Every new account gets free credits, so sign-ups must be costly to automate.
 - Set the **site** key as `VITE_TURNSTILE_SITE_KEY` in Vercel (Production + Preview), redeploy, and only then switch captcha on in Supabase. Order matters: with captcha on and no site key in the frontend, email sign-in, sign-up and password reset all fail.
 - The frontend sends the token on sign-up, password sign-in and the password-reset email. Signed-in users change their password on `/reset-password` (`updateUser`), which needs no captcha. Google OAuth is not covered by the captcha.
 - `vercel.json` allows `https://challenges.cloudflare.com` in `script-src` and `frame-src`.
+- **Passwords** (AUDIT-APP.md L14): Authentication → Sign In / Providers → Email → *Minimum password length* **8** (the forms require 8). *Prevent use of leaked passwords* (HaveIBeenPwned) is on the same page; Supabase offers it on the Pro plan and up.
 
 ## 4. Database
 

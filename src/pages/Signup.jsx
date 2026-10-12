@@ -72,7 +72,8 @@ export default function Signup() {
           </div>
           <div>
             <div className="label mb-1">Password</div>
-            <input className="input" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input className="input" type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div className="font-mono text-[10px] text-muted mt-1">At least 8 characters.</div>
           </div>
           <Captcha ref={captchaRef} onToken={setCaptchaToken} />
           {err && <div className="font-mono text-xs text-accent">{err}</div>}
