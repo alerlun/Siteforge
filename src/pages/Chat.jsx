@@ -8,6 +8,17 @@ import { estimateCredits, formatCredits, formatCreditsShort, MONTHLY_ALLOWANCE }
 import SaleModal from '../components/SaleModal.jsx';
 import SessionsPanel from '../components/SessionsPanel.jsx';
 
+// generate-site accepts at most 40 history messages of up to 4000 chars each
+// (_shared/validation.ts); longer chats send only the most recent ones.
+const HISTORY_LIMIT = 40;
+const HISTORY_MAX_CHARS = 4000;
+
+function historyFor(messages) {
+  return messages
+    .slice(-HISTORY_LIMIT)
+    .map((m) => ({ role: m.role, content: String(m.content ?? '').slice(0, HISTORY_MAX_CHARS) }));
+}
+
 function useMobile() {
   const [mobile, setMobile] = useState(() => window.innerWidth < 768);
   useEffect(() => {
@@ -58,7 +69,7 @@ export default function Chat() {
   // answers 402 if it turns out to be a (more expensive) new build the balance can't cover.
   const genEstimate = html
     ? estimateCredits('edit', html.length)
-    : estimateCredits('generation', messages.reduce((n, m) => n + (m.content?.length ?? 0), 0));
+    : estimateCredits('generation', historyFor(messages).reduce((n, m) => n + m.content.length, 0));
   const canGenerate = creditBalance >= genEstimate;
   const planLabel = isPro ? '[PRO]' : '[FREE]';
 
@@ -157,7 +168,11 @@ export default function Chat() {
   }
 
   async function deleteSession(id) {
-    await supabase.from('chat_sessions').delete().eq('id', id);
+    const { error: delErr } = await supabase.from('chat_sessions').delete().eq('id', id);
+    if (delErr) {
+      setError(`Could not delete the chat: ${delErr.message}`);
+      return;
+    }
     if (id === activeSessionId) {
       setActiveSessionId(null);
       setMessages([]);
@@ -178,20 +193,29 @@ export default function Chat() {
     }
     const userContent = input.trim();
     const userMsg = { role: 'user', content: userContent };
-    const history = messages.map((m) => ({ role: m.role, content: m.content }));
+    const history = historyFor(messages);
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setBusy(true);
 
     // Persist the user message immediately (will get a session_id once function returns).
+    // A failed history write does not stop the generation; the user is told afterwards.
+    let historySaveFailed = false;
+    const noteSave = ({ error: saveErr }) => {
+      if (saveErr) {
+        historySaveFailed = true;
+        console.error('[chat] message not saved', saveErr);
+      }
+    };
     let userMsgRow = null;
     if (activeSessionId) {
-      const { data } = await supabase
+      const res = await supabase
         .from('chat_messages')
         .insert({ session_id: activeSessionId, user_id: user.id, role: 'user', content: userContent })
         .select()
         .single();
-      userMsgRow = data;
+      noteSave(res);
+      userMsgRow = res.data;
     }
 
     try {
@@ -219,26 +243,29 @@ export default function Chat() {
       if (newSessionId && newSessionId !== activeSessionId) {
         setActiveSessionId(newSessionId);
         if (userMsgRow) {
-          await supabase
+          noteSave(await supabase
             .from('chat_messages')
             .update({ session_id: newSessionId })
-            .eq('id', userMsgRow.id);
+            .eq('id', userMsgRow.id));
         } else {
-          await supabase
+          noteSave(await supabase
             .from('chat_messages')
-            .insert({ session_id: newSessionId, user_id: user.id, role: 'user', content: userContent });
+            .insert({ session_id: newSessionId, user_id: user.id, role: 'user', content: userContent }));
         }
       }
 
       const sessionToUse = newSessionId ?? activeSessionId;
       if (sessionToUse) {
-        await supabase.from('chat_messages').insert({
+        noteSave(await supabase.from('chat_messages').insert({
           session_id: sessionToUse,
           user_id: user.id,
           role: 'assistant',
           content: assistantContent,
           site_id: site?.id ?? null,
-        });
+        }));
+      }
+      if (historySaveFailed) {
+        setError('The site was saved, but this exchange could not be added to the chat history.');
       }
 
       setHtml(data.html);

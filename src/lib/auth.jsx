@@ -24,12 +24,14 @@ export function AuthProvider({ children }) {
   const loadSeq = useRef(0);
   const lastLoadAt = useRef(0);
 
-  const loadProfile = useCallback(async (uid) => {
+  const loadProfile = useCallback(async (uid, retry = true) => {
     const seq = ++loadSeq.current;
     if (!uid) {
       setProfile(null);
       return;
     }
+    // A different user signed in: never keep showing the previous user's profile.
+    setProfile((prev) => (prev && prev.id !== uid ? null : prev));
     lastLoadAt.current = Date.now();
     const { data, error } = await supabase
       .from('profiles')
@@ -38,8 +40,13 @@ export function AuthProvider({ children }) {
       .maybeSingle();
     if (seq !== loadSeq.current) return;
     if (error) {
-      // Keep the last known profile on a transient error instead of showing 0 credits.
+      // Keep this user's last known profile on a transient error instead of showing
+      // 0 credits, and try once more.
       console.error('[auth] profile load failed', error);
+      if (retry) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (seq === loadSeq.current) await loadProfile(uid, false);
+      }
     } else {
       setProfile(data);
     }
