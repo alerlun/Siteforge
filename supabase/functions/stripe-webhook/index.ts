@@ -1,6 +1,7 @@
 // stripe-webhook — verifies signature, updates plan/credits on subscription events.
-// Handled: checkout.session.completed, invoice.paid (subscription_cycle),
-// customer.subscription.deleted. The Stripe endpoint must be subscribed to all three.
+// Handled: checkout.session.completed, checkout.session.async_payment_succeeded,
+// invoice.paid (subscription_cycle), customer.subscription.deleted. The Stripe endpoint
+// must be subscribed to all four.
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
