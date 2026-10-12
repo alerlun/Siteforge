@@ -1,14 +1,16 @@
 import { corsHeaders } from '../_shared/cors.ts';
+import { enforce } from '../_shared/ratelimit.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
-import { errorResponse, clientIp, readBoundedJson } from '../_shared/guards.ts';
+import { errorResponse, clientIp, readBoundedJson, fromHttpError } from '../_shared/guards.ts';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
-
+async function handle(req: Request): Promise<Response> {
   const user = await getUser(req);
   if (!user) return errorResponse(401, 'Unauthorized');
+
+  const blocked = (await enforce('referral', clientIp(req))) ?? (await enforce('referral', user.id));
+  if (blocked) return blocked;
 
   const supabase = adminClient();
 
@@ -93,4 +95,16 @@ Deno.serve(async (req) => {
     JSON.stringify({ ok: true }),
     { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
   );
+}
+
+// Errors (e.g. HttpError from readBoundedJson, DB failures) become JSON responses
+// instead of an unhandled 500 (AUDIT-APP.md L10).
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+  try {
+    return await handle(req);
+  } catch (err) {
+    console.error('[claim-referral]', err);
+    return fromHttpError(err);
+  }
 });
