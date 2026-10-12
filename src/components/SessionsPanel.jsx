@@ -41,12 +41,16 @@ export default function SessionsPanel({
                 </div>
               </div>
               <button
-                className="font-mono text-muted hover:text-accent opacity-0 group-hover:opacity-100"
+                // Always visible on touch screens (no hover); hover-only on desktop.
+                className="font-mono text-muted hover:text-accent md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
                 onClick={(e) => {
                   e.stopPropagation();
+                  // Messages are deleted with the chat; its sites stay (session_id set null).
+                  if (!window.confirm(`Delete "${s.title || 'New chat'}"? Its messages are removed; generated sites stay in Stats.`)) return;
                   onDelete(s.id);
                 }}
                 title="Delete chat"
+                aria-label="Delete chat"
               >
                 ×
               </button>
