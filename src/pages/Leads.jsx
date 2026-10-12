@@ -110,8 +110,14 @@ export default function Leads() {
   }
 
   async function updateStatus(id, status) {
+    const previous = rows.find((r) => r.id === id)?.status;
     setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
-    await supabase.from('leads').update({ status }).eq('id', id);
+    const { error: err } = await supabase.from('leads').update({ status }).eq('id', id);
+    if (err) {
+      // Undo the optimistic change so the table matches the database.
+      setRows((prev) => prev.map((r) => (r.id === id ? { ...r, status: previous } : r)));
+      setError(`Could not update the status: ${err.message}`);
+    }
   }
 
   function toggleSelected(id) {
