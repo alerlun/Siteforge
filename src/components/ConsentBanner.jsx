@@ -2,9 +2,9 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { grantConsent, denyConsent, storedConsent } from '../lib/analytics.js';
 
-// Cookie-consent bar for GA Consent Mode v2. Shows only when no prior choice exists
-// and a GA measurement ID is configured. Accept → analytics_storage granted; Decline →
-// stays denied. Choice persists in localStorage so it isn't shown again.
+// Cookie-consent bar. GA is not loaded until Accept. Shows only when no prior choice exists
+// and a GA measurement ID is configured. Accept → GA loads with analytics_storage granted
+// (ads denied); Decline → never loads. Choice persists in localStorage.
 export default function ConsentBanner() {
   const hasGa = Boolean(import.meta.env.VITE_GA_MEASUREMENT_ID);
   const [decided, setDecided] = useState(() => storedConsent() !== null);

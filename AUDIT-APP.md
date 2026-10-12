@@ -177,6 +177,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
   - `page_location` skickar hela URL:en, inklusive `?ref=SF-XXXXXX`.
 - **Förslag:** Ladda gtag först efter "Accept". Ge bara `analytics_storage: 'granted'` och låt ad-signalerna vara nekade. Ta bort query-strängen från `page_location`.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; **testat** mot lokal produktionsbuild med headless Chromium): `gtag.js` hämtas först efter "Accept" (eller vid tidigare sparat "granted"); före svar och efter "Decline" går inga anrop till Google. Consent-läget är `analytics_storage: granted` och alla ad-signaler `denied`. `page_view` skickas utan query-sträng (`?ref=SF-TEST01` syntes inte i `page_location`), och sidan man accepterar på får en page view direkt.
+
 ---
 
 ## Låg

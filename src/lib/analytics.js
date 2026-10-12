@@ -1,18 +1,21 @@
-// Google Analytics 4 with Consent Mode v2 (default-deny).
+// Google Analytics 4, loaded only after the user accepts analytics cookies.
 //
 // Loaded entirely from JS (no inline <script> in index.html) so the app's CSP can keep
 // `script-src 'self' https://www.googletagmanager.com` without `'unsafe-inline'`. gtag.js
 // is injected as an external script; the dataLayer pushes below run as same-origin module
 // code, which CSP allows.
 //
-// Consent starts DENIED. Nothing that sets analytics cookies runs until grantConsent()
-// is called (the consent banner does this on Accept). Page views are sent manually on
-// route changes (send_page_view:false) because this is a client-side-routed SPA.
+// Nothing is sent to Google before consent: gtag.js is not even requested until
+// grantConsent() (the banner's Accept) or a stored 'granted' choice. Consent covers
+// analytics only, so the ad signals stay denied. Page views are sent manually on route
+// changes (send_page_view:false) because this is a client-side-routed SPA, without the
+// query string (it can carry referral codes).
 
 const GA_ID = import.meta.env.VITE_GA_MEASUREMENT_ID;
 const CONSENT_KEY = 'sf_ga_consent'; // 'granted' | 'denied'
 
-let initialized = false;
+let loaded = false;
+let granted = false;
 
 function gtag() {
   // gtag must push the literal `arguments` object — do not spread.
@@ -27,20 +30,20 @@ export function storedConsent() {
   }
 }
 
-// Inject gtag.js and prime Consent Mode. Safe to call once; later calls no-op.
-export function initAnalytics() {
-  if (initialized || !GA_ID || typeof window === 'undefined') return;
-  initialized = true;
+// Inject gtag.js with analytics consent. Safe to call more than once.
+function loadGtag() {
+  if (loaded || !GA_ID || typeof window === 'undefined') return;
+  loaded = true;
 
   window.dataLayer = window.dataLayer || [];
   gtag('js', new Date());
 
-  // Consent Mode v2 defaults — everything denied until the user opts in.
+  // Consent Mode v2: ads always denied; analytics granted (we only get here after consent).
   gtag('consent', 'default', {
     ad_storage: 'denied',
     ad_user_data: 'denied',
     ad_personalization: 'denied',
-    analytics_storage: 'denied',
+    analytics_storage: 'granted',
   });
 
   // Manual page_view (SPA): we fire them on route change via trackPageView().
@@ -50,41 +53,42 @@ export function initAnalytics() {
   s.async = true;
   s.src = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(GA_ID)}`;
   document.head.appendChild(s);
-
-  // Re-apply a previously granted consent so returning visitors aren't re-prompted.
-  if (storedConsent() === 'granted') grantConsent({ persist: false });
 }
 
-export function grantConsent({ persist = true } = {}) {
-  if (!GA_ID) return;
-  if (persist) {
-    try { localStorage.setItem(CONSENT_KEY, 'granted'); } catch { /* ignore */ }
+// On app start: load GA only for returning visitors who already accepted.
+export function initAnalytics() {
+  if (storedConsent() === 'granted') {
+    granted = true;
+    loadGtag();
   }
-  gtag('consent', 'update', {
-    ad_storage: 'granted',
-    ad_user_data: 'granted',
-    ad_personalization: 'granted',
-    analytics_storage: 'granted',
-  });
+}
+
+export function grantConsent() {
+  try { localStorage.setItem(CONSENT_KEY, 'granted'); } catch { /* ignore */ }
+  if (!GA_ID) return;
+  granted = true;
+  if (loaded) {
+    gtag('consent', 'update', { analytics_storage: 'granted' });
+  } else {
+    loadGtag();
+  }
+  // The page view for the current page was skipped before consent.
+  trackPageView(window.location.pathname);
 }
 
 export function denyConsent() {
   try { localStorage.setItem(CONSENT_KEY, 'denied'); } catch { /* ignore */ }
-  if (!GA_ID) return;
-  gtag('consent', 'update', {
-    ad_storage: 'denied',
-    ad_user_data: 'denied',
-    ad_personalization: 'denied',
-    analytics_storage: 'denied',
-  });
+  granted = false;
+  if (loaded) gtag('consent', 'update', { analytics_storage: 'denied' });
 }
 
-// Send a SPA page view. No-ops until init + consent allow it to actually record.
+// Send a SPA page view. No-op without consent. The query string is dropped.
 export function trackPageView(path) {
-  if (!GA_ID || !window.dataLayer) return;
+  if (!GA_ID || !loaded || !granted) return;
+  const pathname = String(path).split('?')[0];
   gtag('event', 'page_view', {
-    page_path: path,
-    page_location: window.location.href,
+    page_path: pathname,
+    page_location: window.location.origin + pathname,
     page_title: document.title,
   });
 }
