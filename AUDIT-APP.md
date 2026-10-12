@@ -136,6 +136,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `isProUser()` räknar `pro_until` som Pro. En användare som fått Pro via värvning ser därför "Manage Billing", som svarar 400 "No Stripe customer on file", och har ingen väg att köpa Pro under eller efter perioden förrän den gått ut.
 - **Förslag:** Visa "Manage Billing" bara om `stripe_customer_id` finns. Visa annars "Pro till <datum>" och en "Upgrade"-knapp.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): "Manage Billing" visas bara när kontot har en Stripe-prenumeration (`stripe_subscription_id`). Pro via värvning visar "until <datum>" under planen och "Upgrade to Pro" (`create-checkout` blockerar bara konton med prenumeration). Manuellt satt Pro utan prenumeration och utan `pro_until` (2 konton i live) visar ingen knapp.
+
 ### M8. Stats räknar varje sajtversion som en egen sajt *(kontrollerat)*
 - **Område:** Bugg (fel statistik)
 - **Fil:** `src/pages/Stats.jsx:19-35`; `generate-site/index.ts:641-645` skapar en ny rad per chatt-ändring

@@ -27,6 +27,12 @@ export default function Settings() {
   }, [upgraded, refreshProfile, setParams]);
 
   const isPro = isProUser(profile);
+  // Only a Stripe subscription has a billing portal. Pro from referrals (pro_until) has
+  // none, so it gets the upgrade button instead of a portal call that always fails.
+  const hasSubscription = !!profile?.stripe_subscription_id;
+  const proUntil = !hasSubscription && profile?.pro_until && new Date(profile.pro_until) > new Date()
+    ? profile.pro_until
+    : null;
   const planLabel = isPro ? 'PRO PLAN' : 'FREE PLAN';
   const leadsLimit = isPro ? 100 : 10;
   const leadsUsed = profile?.leads_used ?? 0;
@@ -161,10 +167,13 @@ export default function Settings() {
             <div>
               <div className="label">current plan</div>
               <div className="mt-2 font-mono text-2xl">{planLabel}</div>
+              {proUntil && (
+                <div className="mt-1 font-mono text-xs text-muted">until {formatDate(proUntil)}</div>
+              )}
             </div>
-            {isPro ? (
+            {hasSubscription ? (
               <button className="btn" disabled={busy} onClick={openPortal}>Manage Billing</button>
-            ) : (
+            ) : isPro && !proUntil ? null /* Pro set manually: nothing to buy or manage */ : (
               <button className="btn-primary" disabled={busy} onClick={startCheckout}>
                 {busy ? '…' : 'Upgrade to Pro'}
               </button>
