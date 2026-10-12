@@ -152,6 +152,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `place_id` sparas inte, och dubbletter filtreras inte bort. Två liknande sökningar ("frisör Karlstad" och "frisörer Karlstad") sparar samma företag igen och drar av kvoten två gånger.
 - **Förslag:** Spara `place_id` (det är också den enda Places-data Google tillåter att lagras utan tidsgräns, se M11), lägg till ett unikt index `(user_id, place_id)`, hoppa över kända place_id innan Details-anropet och räkna bara nya.
 
+> **Åtgärdat 2026-10-12** (**väntar på granskning och deploy**; inte testat): migration `20261012150000_leads_place_id.sql` lägger till `leads.place_id` och ett unikt index `(user_id, place_id)`. `scrape-leads` hämtar användarens redan sparade place_id innan Details-anropen, hoppar över dem (ingen kvot, inget Details-anrop), sparar `place_id` och skriver med `ON CONFLICT DO NOTHING` för samtidiga sökningar. Leads-sidan visar hur många som redan fanns. **Ordning:** migrationen före funktionen, annars svarar `scrape-leads` med fel. Befintliga leads saknar `place_id` och kan därför inte dubblettkontrolleras.
+
 ### M10. På mobil går det inte att byta chatt eller starta en ny *(kontrollerat)*
 - **Område:** UX / Mobil
 - **Fil:** `src/pages/Chat.jsx:285-298` (SessionsPanel bara när `!isMobile`)
