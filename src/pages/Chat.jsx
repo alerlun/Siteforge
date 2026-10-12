@@ -47,6 +47,8 @@ export default function Chat() {
   const [referralNudge, setReferralNudge] = useState(false);
   const [sidebarW, setSidebarW] = useState(224);
   const [genW, setGenW] = useState(620);
+  const [fullscreen, setFullscreen] = useState(false);
+  const fullscreenRef = useRef(null);
   const threadRef = useRef(null);
 
   const creditBalance = profile?.credit_balance ?? 0;
@@ -86,7 +88,7 @@ export default function Chat() {
   //     session token lives. This stops generated/edited HTML from exfiltrating the
   //     user's auth token (XSS / token theft). The URL is revoked when html changes.
   useEffect(() => {
-    if (!html) { setPreviewUrl(''); return; }
+    if (!html) { setPreviewUrl(''); setFullscreen(false); return; }
     const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
@@ -269,15 +271,29 @@ export default function Chat() {
 
   const businessForFile = latestSite?.business_name || meta?.businessName || 'site';
 
+  // Fullscreen shows the same sandboxed iframe in an overlay. It must not open the blob
+  // URL in a new tab: a top-level blob: document runs in the app's origin without a
+  // sandbox, so generated HTML could read the Supabase session from localStorage.
   function openFullscreen() {
     if (!html) return;
-    // Open via a blob: URL rather than document.write into about:blank. `noopener`
-    // severs the new tab's access to window.opener (prevents reverse tabnabbing by the
-    // generated page). Revoke after a delay so the navigation has completed.
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-    window.open(url, '_blank', 'noopener');
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    setFullscreen(true);
   }
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const el = fullscreenRef.current;
+    // Browser fullscreen when allowed; the overlay alone still covers the viewport.
+    el?.requestFullscreen?.().catch(() => {});
+    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+    const onChange = () => { if (!document.fullscreenElement) setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('fullscreenchange', onChange);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('fullscreenchange', onChange);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, [fullscreen]);
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] md:h-screen">
@@ -466,6 +482,23 @@ export default function Chat() {
         onClose={() => setSaleOpen(false)}
         onSaved={(updated) => setLatestSite(updated)}
       />
+
+      {fullscreen && previewUrl && (
+        <div ref={fullscreenRef} className="fixed inset-0 z-50 flex flex-col bg-black">
+          <div className="flex justify-end p-2">
+            <button className="btn text-xs px-2 py-1" onClick={() => setFullscreen(false)}>
+              Close (Esc)
+            </button>
+          </div>
+          <iframe
+            title="preview fullscreen"
+            src={previewUrl}
+            className="flex-1 w-full bg-white"
+            // Same sandbox as the inline preview: opaque origin, no access to the session.
+            sandbox="allow-scripts allow-forms allow-popups allow-modals"
+          />
+        </div>
+      )}
     </div>
   );
 }
