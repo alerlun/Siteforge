@@ -114,6 +114,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `clientIp()` tar första värdet i `X-Forwarded-For`, och det värdet sätter klienten själv. IP-baserad rate limiting (`enforce(..., clientIp(req))`) kringgås genom att skicka ett nytt värde varje gång. Gränsen per användare finns kvar för inloggade funktioner, men `stripe-webhook` har bara IP-gräns. Värvningsskyddet mot samma IP (`claim-referral`) påverkas också. Se `ARKITEKTUR.md` 8.3 punkt 13.
 - **Förslag:** Använd det värde Supabase edge-plattformen själv sätter (`cf-connecting-ip` först, eller sista värdet i `X-Forwarded-For` som lagts till av betrodd proxy). Verifiera med en loggad testrequest vilket header-värde som är pålitligt.
 
+> **Kontrollerat 2026-10-12, ingen kodändring behövs:** testanrop mot `stripe-webhook` med förfalskad `X-Forwarded-For` (`203.0.113.77`, och `198.51.100.9, 203.0.113.5` plus `X-Real-IP`) räknades i `rate_limits` under anroparens riktiga IP (`webhook:<riktig IP>`, count 1 → 2). Supabase-gatewayn skriver alltså över headern, och första värdet går att lita på. En förfalskad `CF-Connecting-IP` stoppas med 403 innan funktionen. Kommentar om detta tillagd i `guards.ts` (ingen deploy behövs). Fyndet gäller bara om funktionerna flyttas bakom en annan proxy.
+
 ### M5. Editor visar "Saved" även när sparningen misslyckas *(kontrollerat)*
 - **Område:** Bugg (dataförlust)
 - **Fil:** `src/pages/Editor.jsx:233-240`
