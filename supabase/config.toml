@@ -14,3 +14,18 @@ verify_jwt = true
 
 [functions.create-portal]
 verify_jwt = true
+
+[functions.edit-element]
+verify_jwt = true
+
+[functions.claim-referral]
+verify_jwt = true
+
+[functions.generate-referral-code]
+verify_jwt = true
+
+[functions.referral-stats]
+verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true

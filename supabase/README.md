@@ -43,7 +43,7 @@ If a knob isn't exposed at that exact value, pick the closest stricter one — n
 ## 3. Auth → URL configuration
 
 - **Site URL**: production origin only (e.g. `https://siteforge.app`).
-- **Additional redirect URLs**: list every preview / staging origin explicitly. Do **not** wildcard the whole domain (`https://*.vercel.app` accepts subdomain takeovers).
+- **Additional redirect URLs**: must include `<origin>/reset-password` (password-reset emails land there) and `<origin>/app/chat` for every origin. List every preview / staging origin explicitly. Do **not** wildcard the whole domain (`https://*.vercel.app` accepts subdomain takeovers).
 - **JWT expiry**: 3600s (1h) is the default — keep, do not extend.
 
 ## 4. Database

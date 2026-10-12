@@ -70,13 +70,18 @@ function computeCredits(usage: TokenUsage, rates: CreditRates): number {
 // Chat edits send the whole current site and get back only SEARCH/REPLACE blocks.
 // Generated HTML runs ~2.5 characters per token (measured on June–October 2026 sites),
 // plus ~1.5k tokens for the edit prompt and the change request.
+// Builds also send the chat history the client supplies (up to 40 messages), so its size
+// is part of the build estimate (~3 characters per token for chat text); a fixed estimate
+// let a large history cost several times what was reserved.
 // Keep in sync with estimateCredits() in src/lib/credits.js.
 const EDIT_MAX_OUTPUT_TOKENS = 8000;
 const EDIT_OUTPUT_ESTIMATE = 3000;
 const HTML_CHARS_PER_TOKEN = 2.5;
 const EDIT_PROMPT_OVERHEAD_TOKENS = 1500;
+const BUILD_BASE_INPUT_TOKENS = 1200;
+const TEXT_CHARS_PER_TOKEN = 3;
 
-function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolean, htmlChars = 0): number {
+function estimateCredits(rates: CreditRates, isEdit: boolean, historyChars: number, htmlChars = 0): number {
   if (isEdit) {
     return computeCredits({
       input_tokens: Math.ceil(htmlChars / HTML_CHARS_PER_TOKEN) + EDIT_PROMPT_OVERHEAD_TOKENS,
@@ -84,7 +89,7 @@ function estimateCredits(rates: CreditRates, isEdit: boolean, hasHistory: boolea
     }, rates);
   }
   return computeCredits({
-    input_tokens: hasHistory ? 3000 : 1200,
+    input_tokens: BUILD_BASE_INPUT_TOKENS + Math.ceil(historyChars / TEXT_CHARS_PER_TOKEN),
     cache_creation_input_tokens: 2000,
     output_tokens: 10000,
   }, rates);
@@ -542,8 +547,9 @@ Deno.serve(async (req) => {
 
     // Atomically withhold the estimate before the main AI call. NULL = balance too low.
     // Settled to the real cost on success, refunded on failure (see the stream below).
+    const historyChars = (history ?? []).reduce((n, m) => n + m.content.length, 0);
     const estimate = estimateCredits(
-      rates, isEditMode, Array.isArray(history) && history.length > 0,
+      rates, isEditMode, historyChars,
       isEditMode ? (currentHtml as string).length : 0,
     );
     const { data: reservationId, error: reserveErr } = await supabase.rpc('reserve_credits', {

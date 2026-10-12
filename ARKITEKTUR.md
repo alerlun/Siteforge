@@ -5,6 +5,8 @@
 > Avsnitt 8 listar avvikelser och risker som hittades under genomgången.
 >
 > **Uppdaterad 2026-10-11 (kväll)** efter credits-, Stripe-, värvnings- och leadsfixarna (se åtgärdsloggen i `CREDITS-ANALYS.md`). Avsnitt 3–5 beskriver det nuvarande flödet; avsnitt 8 visar vad som är åtgärdat.
+>
+> **Omverifierad 2026-10-12** mot koden (`audit-fixes`, 9b7ebb8) och live-DB (skrivskyddat: policies, tabell- och funktionsrättigheter, triggers, cron, `config`, migrationslistan, edge functions med versioner). Tillägg: REVOKE-migrationen, tomma SEARCH-block, `config.toml`-avvikelse för värvningsfunktionerna (8.3 punkt 20) och öppna fynd från kodgranskningen (8.4).
 
 ---
 
@@ -77,7 +79,7 @@ siteforge/
 └── SECURITY_AUDIT.md
 ```
 
-**Rutin för DB-ändringar (beslutad 2026-10-07):** `schema.sql` är ett fryst utgångsläge som motsvarar live-databasen 2026-10-07 och redigeras inte längre. Varje ändring görs som en ny fil `supabase/migrations/<YYYYMMDDHHMMSS>_<namn>.sql`, med en avgränsad ändring per fil. Filen granskas innan den körs (`supabase db push` eller SQL-editorn). Aktuellt schema = `schema.sql` + alla migrationer i ordning. Fram till 2026-10-07 applicerades schemat genom att köra `schema.sql` manuellt. Alla migrationer i `supabase/migrations/` är körda mot live-databasen och registrerade (`supabase_migrations.schema_migrations`), senast `20261012100000_confirm_referral` (2026-10-11).
+**Rutin för DB-ändringar (beslutad 2026-10-07):** `schema.sql` är ett fryst utgångsläge som motsvarar live-databasen 2026-10-07 och redigeras inte längre. Varje ändring görs som en ny fil `supabase/migrations/<YYYYMMDDHHMMSS>_<namn>.sql`, med en avgränsad ändring per fil. Filen granskas innan den körs (`supabase db push` eller SQL-editorn). Aktuellt schema = `schema.sql` + alla migrationer i ordning. Fram till 2026-10-07 applicerades schemat genom att köra `schema.sql` manuellt. Alla migrationer i `supabase/migrations/` är körda mot live-databasen och registrerade (`supabase_migrations.schema_migrations`), senast `20261012110000_revoke_client_grants_internal_tables` (verifierat 2026-10-12, 11 migrationer).
 
 ### Routes (`src/App.jsx`)
 
@@ -202,7 +204,7 @@ Värden i `config`: `in_rate = 1`, `out_rate = 5`, `margin = 1.1`. `edit-element
 | Chatt-ändring | (sajtens tecken / 2,5 + 1 500) in + 3 000 ut ≈ 26 000–35 000 | ~13 000 |
 | Element-ändring | 500 in + 3 000 ut = 17 050 | 250–2 200 |
 
-Chatt-ändringar svarar med SEARCH/REPLACE-block, inte hela sajten. Varje block måste matcha exakt ett ställe, annars avvisas hela ändringen och reservationen återbetalas.
+Chatt-ändringar svarar med SEARCH/REPLACE-block, inte hela sajten. Varje block måste matcha exakt ett ställe, annars avvisas hela ändringen och reservationen återbetalas. Block med tom SEARCH-del avvisas också (gav tidigare oändlig loop, rättat i 9b7ebb8, deployat som generate-site v43).
 
 En reservation som aldrig avslutas (funktionen dör) ligger kvar som `reserved`. Användaren har då betalat estimatet, inget mer. Sådana rader hittas med `status = 'reserved'` och gammal `created_at`.
 
@@ -253,16 +255,18 @@ Alla funktioner utom `stripe-webhook` validerar själva bearer-token med `getUse
 | Funktion | verify_jwt i `config.toml` | verify_jwt live | Egen auth | Rate limit |
 |---|---|---|---|---|
 | generate-site | true | true (sedan deploy 2026-10-11) | `getUser` | 10/min IP + användare |
-| edit-element | (ej angiven) | true | `getUser` + ägarkontroll av sajt | delar `generate`-gränsen |
+| edit-element | true | true | `getUser` + ägarkontroll av sajt | delar `generate`-gränsen |
 | scrape-leads | true | true | `getUser` | 20/min |
 | create-checkout | true | true | `getUser` | 10/min |
 | create-portal | true | true | `getUser` | 10/min |
 | stripe-webhook | false | false | Stripe-signatur | 120/min IP |
-| claim-referral | (ej angiven) | false | `getUser`, 1 h-fönster efter signup | – |
-| generate-referral-code | (ej angiven) | false | `getUser` | – |
-| referral-stats | (ej angiven) | false | `getUser` | – |
+| claim-referral | true | true (sedan 2026-10-12) | `getUser`, 1 h-fönster efter signup | – |
+| generate-referral-code | true | true (sedan 2026-10-12) | `getUser` | – |
+| referral-stats | true | true (sedan 2026-10-12) | `getUser` | – |
 
 Rate limiting är fail-open (DB-fel → anropet släpps igenom). CORS är `*`.
+
+Alla funktioner har nu ett uttryckligt `verify_jwt` i `config.toml`, och `config.toml` = live för samtliga (verifierat 2026-10-12).
 
 ### 6.3 RLS – vem får läsa/skriva vad (roll `authenticated`)
 
@@ -311,7 +315,7 @@ Inga värden anges här.
 
 ## 8. Avvikelser och risker som hittades
 
-Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 10 (delvis), 13, 14, 16.
+Status 2026-10-12: punkt 1–12, 17–20 är åtgärdade (✅). Kvar: 10 (delvis), 13, 14, 16 och 21–29 (8.4).
 
 ### 8.1 Säkerhet
 
@@ -347,3 +351,18 @@ Status 2026-10-11: punkt 1–12 och 17 är åtgärdade (✅). Kvar: 10 (delvis),
 14. `config.stripe_webhook_secret` lagrar en hemlighet i DB som ingen kod läser.
 15. ~~`CLAUDE.md` och arbetsreglerna angav olika rutiner för DB-ändringar.~~ Löst 2026-10-07: migrationsfiler i `supabase/migrations/`, och `schema.sql` är fryst. `CLAUDE.md`, `supabase/README.md` och `schema.sql`-huvudet säger nu samma sak (se avsnitt 2).
 16. `.env.example` anger `ANTHROPIC_MODEL=claude-sonnet-4-5`, koden har default `claude-sonnet-4-6`. Sidebar visar `v1.0.1`, `package.json` säger `1.1.0`.
+20. ✅ **Åtgärdad 2026-10-12** (alla fyra inlagda i `config.toml` med `true`, värvningsfunktionerna omdeployade, utan token → 401, CORS-preflight → 200). ~~ `claim-referral`, `generate-referral-code` och `referral-stats` saknas i `config.toml` men har `verify_jwt = false` live. Nästa deploy av någon av dem slår på gateway-kontrollen (`true`). Troligen ofarligt (de kräver redan en giltig token via `getUser`), men live och repo skiljer sig. Bör antingen läggas in i `config.toml` med önskat värde eller deployas om medvetet.~~
+
+### 8.4 Öppna fynd från kodgranskningen 2026-10-11 (ej åtgärdade)
+
+Fynd 1 (oändlig loop vid tomt SEARCH-block) är åtgärdat, se avsnitt 4. Kvar (21–23 omkontrollerade i koden 2026-10-12, övriga enligt granskningen):
+
+21. **Misslyckad chatt-ändring återbetalar hela estimatet** (`generate-site`, `refund_credits`) trots att modellen redan förbrukat tokens. Användaren kan alltså få misslyckade ändringar gratis.
+22. **`edit-element` har ett fast estimat** (500 in + 3 000 ut = 17 050) oavsett elementets storlek (upp till ~50 000 tecken). Estimatet kan bli för lågt; `settle_credits` drar då mer och saldot kan bli negativt.
+23. **Klassificeringen (Haiku) körs före reservationen** i `generate-site`, så en användare med 0 saldo får ändå ett gratis Haiku-anrop per försök (begränsat av rate limit 10/min).
+24. **`auth.jsx`:** när en profilladdning avbryts av en nyare (`loadSeq`) kan `loading = false` sättas medan `profile` fortfarande är `null`.
+25. **Månadsreset under pågående reservation:** `grant_credits('monthly_reset')` sätter saldot till tilldelningen; när reservationen sedan avslutas justeras saldot relativt det nya värdet, så användaren får fel saldo just den gången.
+26. **SEARCH trimmas vid omförsök men inte REPLACE** i `applyEditBlocks`, vilket kan ge felaktiga mellanslag/radbrytningar.
+27. **Ingen städning av hängande `reserved`-rader** (se avsnitt 4). 0 sådana rader live 2026-10-12.
+28. **`auth.jsx` behåller gammal profil vid fel** – även efter byte av användare kan föregående användares profil visas tills nästa lyckade laddning.
+29. `schema.sql`-huvudet har ändrats (bara kommentarer) trots att filen ska vara fryst.

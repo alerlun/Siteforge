@@ -26,11 +26,58 @@ Deno.serve(async (req) => {
     if (!stripeKey || !priceId) return errorResponse(500, 'Stripe env not configured');
 
     const supabase = adminClient();
-    const { data: profile } = await supabase
+    const { data: profile, error: profileErr } = await supabase
       .from('profiles')
-      .select('stripe_customer_id, email')
+      .select('plan, stripe_customer_id, stripe_subscription_id')
       .eq('id', user.id)
       .single();
+    if (profileErr || !profile) return errorResponse(404, 'profile_not_found');
+
+    // One subscription per account: a second checkout (two tabs, double click before the
+    // webhook lands) would start a second subscription that is billed every month.
+    if (profile.plan === 'pro' && profile.stripe_subscription_id) {
+      return errorResponse(409, 'already_subscribed');
+    }
+
+    // Create the Stripe customer before the session and store it, so every checkout for
+    // this account uses the same customer. With customer_email each session created its
+    // own customer, and a subscription on a customer the profile no longer pointed at
+    // could not be seen or cancelled in the Billing Portal.
+    let customerId: string | null = profile.stripe_customer_id ?? null;
+    if (!customerId) {
+      const cParams = new URLSearchParams();
+      if (user.email) cParams.set('email', user.email);
+      cParams.set('metadata[supabase_user_id]', user.id);
+      const cRes = await fetch('https://api.stripe.com/v1/customers', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${stripeKey}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          // Concurrent requests for the same user get the same customer back.
+          'Idempotency-Key': `siteforge-customer-${user.id}`,
+        },
+        body: cParams.toString(),
+      });
+      const customer = await cRes.json();
+      if (!cRes.ok || !customer?.id) {
+        return errorResponse(502, customer?.error?.message ?? 'stripe_customer_error');
+      }
+      // Only fill an empty slot; if a parallel request stored one first, use that one.
+      const { data: stored, error: storeErr } = await supabase
+        .from('profiles')
+        .update({ stripe_customer_id: customer.id })
+        .eq('id', user.id)
+        .is('stripe_customer_id', null)
+        .select('stripe_customer_id');
+      if (storeErr) throw new Error(`store stripe_customer_id: ${storeErr.message}`);
+      if (stored && stored.length) {
+        customerId = customer.id;
+      } else {
+        const { data: again } = await supabase
+          .from('profiles').select('stripe_customer_id').eq('id', user.id).single();
+        customerId = again?.stripe_customer_id ?? customer.id;
+      }
+    }
 
     const params = new URLSearchParams();
     params.set('mode', 'subscription');
@@ -40,11 +87,8 @@ Deno.serve(async (req) => {
     params.set('cancel_url', `${baseUrl}/app/settings`);
     params.set('client_reference_id', user.id);
     params.set('allow_promotion_codes', 'true');
-    if (profile?.stripe_customer_id) {
-      params.set('customer', profile.stripe_customer_id);
-    } else if (user.email) {
-      params.set('customer_email', user.email);
-    }
+    if (!customerId) return errorResponse(502, 'stripe_customer_error');
+    params.set('customer', customerId);
     params.set('metadata[supabase_user_id]', user.id);
 
     const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {

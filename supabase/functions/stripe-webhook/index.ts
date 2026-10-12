@@ -121,9 +121,11 @@ Deno.serve(async (req) => {
     } else if (event.type === 'customer.subscription.deleted') {
       // Downgrade. The remaining balance is kept until the next monthly reset.
       // Failed payments are not handled: Stripe retries, then sends this event.
+      // Only the subscription the profile points at downgrades it: if a customer ever has
+      // a second (stray) subscription, cancelling that one must not end an active Pro.
       const sub = event.data.object;
       const customerId = sub.customer;
-      if (customerId) {
+      if (customerId && sub.id) {
         const { error } = await supabase
           .from('profiles')
           .update({
@@ -131,7 +133,8 @@ Deno.serve(async (req) => {
             stripe_customer_id: null,
             stripe_subscription_id: null,
           })
-          .eq('stripe_customer_id', customerId);
+          .eq('stripe_customer_id', customerId)
+          .eq('stripe_subscription_id', sub.id);
         if (error) throw new Error(`downgrade: ${error.message}`);
       }
     }

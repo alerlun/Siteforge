@@ -74,17 +74,20 @@ export default function Leads() {
       const examined = data.examined ?? 0;
       const skipped = data.skippedHasWebsite ?? 0;
       const found = data.count ?? 0;
+      const quotaUsed = data.quotaUsed ?? found;
+      // Every 5 businesses scanned use at least 1 lead of the quota (server: EXAMINED_PER_LEAD).
+      const quotaNote = quotaUsed > found ? ` Used ${quotaUsed} of your lead quota (1 per 5 scanned).` : '';
       if (websiteFilter === 'both') {
         setInfo(
-          found === 0
+          (found === 0
             ? `Scanned ${examined} businesses — no results. Try a different city or business type.`
-            : `Scanned ${examined} — added ${found} businesses (with + without websites).`,
+            : `Scanned ${examined} — added ${found} businesses (with + without websites).`) + quotaNote,
         );
       } else {
         setInfo(
-          found === 0
+          (found === 0
             ? `Scanned ${examined} businesses — all have websites. Try a different city or business type.`
-            : `Scanned ${examined} — kept ${found} without websites, skipped ${skipped} with websites.`,
+            : `Scanned ${examined} — kept ${found} without websites, skipped ${skipped} with websites.`) + quotaNote,
         );
       }
       await refreshProfile();
