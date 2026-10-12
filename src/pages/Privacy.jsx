@@ -24,10 +24,12 @@ export default function Privacy() {
 
       <LegalSection heading="Cookies & analytics">
         <p>
-          We use Google Analytics 4 to understand product usage. Analytics cookies load in
-          a default-denied state and record nothing until you click <strong>Accept</strong>
-          on the consent banner. You can decline at any time; declining keeps the product
-          fully functional. Essential cookies needed to keep you signed in are always set.
+          We use Google Analytics 4 to understand product usage. Google Analytics is not
+          loaded and nothing is sent to Google until you click <strong>Accept</strong> on
+          the consent banner. Your consent covers analytics only: advertising features stay
+          off, and page addresses are sent without query parameters such as referral codes.
+          You can decline; declining keeps the product fully functional. Sign-in data needed
+          to keep you logged in is always stored in your browser.
         </p>
       </LegalSection>
 
