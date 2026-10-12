@@ -211,7 +211,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | L18 | Bugg | `src/pages/Chat.jsx:157-166`, `:186-240`; `Leads.jsx:102-105` | Fel från `chat_messages`-insert, `deleteSession` och `updateStatus` ignoreras; ingen återställning av optimistisk ändring. | Kontrollera `error` och visa det. |
 | L19 | UX | `src/components/SessionsPanel.jsx:43-52` | Radera chatt utan bekräftelse; knappen syns bara vid hover och saknar `aria-label`. | Bekräftelsedialog, synlig knapp, `aria-label="Delete chat"`. |
 | L20 | Prestanda | `Leads.jsx:47-50`, `Stats.jsx:19-22`, `Chat.jsx:67-70` | Alla leads, sajter och chattar hämtas utan paginering. | `range()` med "Ladda fler" / virtuell lista, och aggregering i SQL för Stats. |
-| L21 | Prestanda | `src/lib/api.js:52`, `:57` | `console.log` för varje SSE-chunk i produktion (inklusive HTML-utdrag). | Ta bort eller lägg bakom `import.meta.env.DEV`. |
+| L21 | Prestanda | `src/lib/api.js:52`, `:57` | `console.log` för varje SSE-chunk i produktion (inklusive HTML-utdrag). | Ta bort eller lägg bakom `import.meta.env.DEV`. **Åtgärdat 2026-10-12** (bakom `DEV`; `JSON.parse`-felet loggas fortfarande). |
 | L23 | Bugg | `src/pages/Chat.jsx:179`, `_shared/validation.ts` (`history` max 40) | *Ny 2026-10-12.* Klienten skickar hela chatthistoriken; efter 40 meddelanden (20 utbyten) svarar servern 400 `invalid_input` och chatten går inte att använda. | Skicka bara de senaste 40 (`messages.slice(-40)`), och räkna estimatet på samma urval. |
 | L22 | Prestanda | `dist/assets/index-*.js` (424 kB okomprimerat) | `Chat` och `Landing` laddas direkt (inte lazy); Stats/recharts 389 kB är lazy (bra). | Lazy-ladda `Chat`, och `Landing` för inloggade. |
 

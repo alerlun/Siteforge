@@ -49,12 +49,13 @@ async function readSSE(res) {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) {
-      console.warn('[readSSE] stream done. totalBytes:', totalBytes, 'buf tail:', JSON.stringify(buf.slice(-200)));
+      if (import.meta.env.DEV) console.warn('[readSSE] stream done. totalBytes:', totalBytes, 'buf tail:', JSON.stringify(buf.slice(-200)));
       break;
     }
     const chunk = decoder.decode(value, { stream: true });
     totalBytes += value.length;
-    console.log('[readSSE] chunk', value.length, 'total', totalBytes, 'preview:', JSON.stringify(chunk.slice(0, 80)));
+    // Debug only: in production this logged every chunk, including HTML excerpts.
+    if (import.meta.env.DEV) console.log('[readSSE] chunk', value.length, 'total', totalBytes, 'preview:', JSON.stringify(chunk.slice(0, 80)));
 
     buf += chunk;
 
