@@ -56,7 +56,7 @@ export default function Chat() {
   // answers 402 if it turns out to be a (more expensive) new build the balance can't cover.
   const genEstimate = html
     ? estimateCredits('edit', html.length)
-    : estimateCredits(messages.length > 0 ? 'generationWithHistory' : 'generation');
+    : estimateCredits('generation', messages.reduce((n, m) => n + (m.content?.length ?? 0), 0));
   const canGenerate = creditBalance >= genEstimate;
   const planLabel = isPro ? '[PRO]' : '[FREE]';
 

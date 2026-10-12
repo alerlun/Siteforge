@@ -14,7 +14,8 @@ export const generateSiteSchema = z.object({
     .array(
       z.object({
         role: z.enum(['user', 'assistant', 'system']),
-        content: z.string().max(20_000),
+        // Same cap as a prompt: history is past prompts plus short assistant notes.
+        content: z.string().max(4000),
       }),
     )
     .max(40)

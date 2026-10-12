@@ -16,7 +16,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | H1 | ✅ Hög | Pengar | Leads-sökning kan köra obegränsat många Google Places-anrop |
 | H2 | ✅ Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
 | H3 | ✅ Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
-| H4 | Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
+| H4 | ✅ Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
 | H5 | Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
 | H6 | Hög | Dataskydd | Det går inte att radera sitt konto, trots att integritetspolicyn säger det |
 | M1 | Medel | Säkerhet | "Fullscreen" kör genererad HTML i appens origin (åtkomst till inloggningstoken) |
@@ -61,7 +61,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
   3. `customer.subscription.deleted` nedgraderar på kund-id utan att jämföra prenumerations-id. Med två prenumerationer på samma kund nedgraderar uppsägning av den ena kontot fast den andra är aktiv.
 - **Förslag:** I `create-checkout`: avvisa (409) om `effective_plan = 'pro'` via Stripe eller om `stripe_subscription_id` finns. Skapa Stripe-kunden server-side första gången och spara `stripe_customer_id` *innan* sessionen skapas, så att alla sessioner får samma `customer`. I webhooken: nedgradera bara om `sub.id = profiles.stripe_subscription_id`. Gå igenom Stripe en gång efter kunder med fler än en aktiv prenumeration.
 
-### H4. Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet *(kontrollerat)*
+### H4. ✅ Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet *(kontrollerat)*
+> **Åtgärdat 2026-10-12** (kod klar, **väntar på**: granskning + körning av migrationen `20261012140000_carry_negative_balance.sql`, och deploy av `generate-site` och `edit-element`): (1) Estimatet för ny sajt räknar med historikens storlek (1 200 + tecken/3 tokens); för element-ändring med elementets storlek (300 + tecken/2,5) och hela output-budgeten (4 096), så den inte kan överdras. (2) Historikmeddelanden begränsas till 4 000 tecken (samma som en prompt; live max idag 165). (3) Ett negativt saldo följer nu med vid månadsreset och förnyelse (`saldo := tilldelning + min(saldo, 0)`), så överdrag betalas av i stället för att nollas. Klientens estimat (`credits.js`, Chat, Editor) är synkade. Ny sajt utan historik: oförändrat 60 721; element-ändring: 22 859–44 858 (tidigare fast 17 050).
 - **Område:** Pengar (gratis credits)
 - **Fil:** `supabase/functions/_shared/validation.ts:12-22` (`history` upp till 40 × 20 000 tecken, body upp till 640 kB), `supabase/functions/generate-site/index.ts:545-548`, `:598-605`; `supabase/functions/edit-element/index.ts:16`, `:117`; `settle_credits` i `20261011220000_reserve_settle_credits.sql`
 - **Problem:** Reservationen bygger på ett fast estimat: 3 000 input-tokens med historik, och 500 för element-ändring. `settle_credits` drar sedan den verkliga kostnaden **utan golv**. En klient som skickar 600 kB `history` ger ~150 000 input-tokens (~165 000 credits för ett enda anrop) men reserverar bara ~63 000. Saldot blir kraftigt negativt. `reset_monthly_counters` sätter saldot till tilldelningen (`saldo := 68 000`), så **skulden försvinner den 1:a**. Samma sak gäller `edit-element`: element på upp till 50 000 tecken, estimat 17 050. Detta är fynd 22 i `ARKITEKTUR.md` 8.4, men större än beskrivet där.
@@ -185,6 +186,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | L19 | UX | `src/components/SessionsPanel.jsx:43-52` | Radera chatt utan bekräftelse; knappen syns bara vid hover och saknar `aria-label`. | Bekräftelsedialog, synlig knapp, `aria-label="Delete chat"`. |
 | L20 | Prestanda | `Leads.jsx:47-50`, `Stats.jsx:19-22`, `Chat.jsx:67-70` | Alla leads, sajter och chattar hämtas utan paginering. | `range()` med "Ladda fler" / virtuell lista, och aggregering i SQL för Stats. |
 | L21 | Prestanda | `src/lib/api.js:52`, `:57` | `console.log` för varje SSE-chunk i produktion (inklusive HTML-utdrag). | Ta bort eller lägg bakom `import.meta.env.DEV`. |
+| L23 | Bugg | `src/pages/Chat.jsx:179`, `_shared/validation.ts` (`history` max 40) | *Ny 2026-10-12.* Klienten skickar hela chatthistoriken; efter 40 meddelanden (20 utbyten) svarar servern 400 `invalid_input` och chatten går inte att använda. | Skicka bara de senaste 40 (`messages.slice(-40)`), och räkna estimatet på samma urval. |
 | L22 | Prestanda | `dist/assets/index-*.js` (424 kB okomprimerat) | `Chat` och `Landing` laddas direkt (inte lazy); Stats/recharts 389 kB är lazy (bra). | Lazy-ladda `Chat`, och `Landing` för inloggade. |
 
 ### Kodkvalitet och tillgänglighet (Låg, samlat)

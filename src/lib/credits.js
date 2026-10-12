@@ -14,27 +14,31 @@ export const MONTHLY_ALLOWANCE = {
 // Pre-flight estimates — must match what the server reserves before the AI call
 // (estimateCredits in supabase/functions/generate-site/index.ts and the estimate in
 // edit-element/index.ts), otherwise the button enables and the server answers 402.
-// cacheWrite = prompt-cache write tokens, charged at 2× the input rate.
-const ESTIMATES = {
-  generation:            { input: 1200,  cacheWrite: 2000, output: 10000 },
-  generationWithHistory: { input: 3000,  cacheWrite: 2000, output: 10000 },
-  elementEdit:           { input: 500,   cacheWrite: 0,    output: 3000 },
-};
-
-// Chat edits send the whole site and get back only the changed parts, so the
-// estimate scales with the site size (~2.5 HTML characters per token + prompt).
+// Estimates follow the size of what is sent:
+// - generation: base prompt + chat history (~3 characters per token), a prompt-cache
+//   write (charged at 2x the input rate) and 10k output tokens;
+// - edit (chat): the whole site (~2.5 HTML characters per token) + prompt, 3k output;
+// - elementEdit: the selected element (~2.5 characters per token) + the full 4096-token
+//   output budget.
 const HTML_CHARS_PER_TOKEN = 2.5;
+const TEXT_CHARS_PER_TOKEN = 3;
+const BUILD_BASE_INPUT_TOKENS = 1200;
 const EDIT_PROMPT_OVERHEAD_TOKENS = 1500;
 const EDIT_OUTPUT_ESTIMATE = 3000;
+const ELEMENT_BASE_INPUT_TOKENS = 300;
+const ELEMENT_MAX_OUTPUT_TOKENS = 4096;
 
-export function estimateCredits(type = 'generation', htmlChars = 0) {
-  const e = type === 'edit'
-    ? {
-        input: Math.ceil(htmlChars / HTML_CHARS_PER_TOKEN) + EDIT_PROMPT_OVERHEAD_TOKENS,
-        cacheWrite: 0,
-        output: EDIT_OUTPUT_ESTIMATE,
-      }
-    : (ESTIMATES[type] ?? ESTIMATES.generation);
+// chars = history characters (generation), site characters (edit) or element +
+// instruction characters (elementEdit).
+export function estimateCredits(type = 'generation', chars = 0) {
+  let e;
+  if (type === 'edit') {
+    e = { input: Math.ceil(chars / HTML_CHARS_PER_TOKEN) + EDIT_PROMPT_OVERHEAD_TOKENS, cacheWrite: 0, output: EDIT_OUTPUT_ESTIMATE };
+  } else if (type === 'elementEdit') {
+    e = { input: ELEMENT_BASE_INPUT_TOKENS + Math.ceil(chars / HTML_CHARS_PER_TOKEN), cacheWrite: 0, output: ELEMENT_MAX_OUTPUT_TOKENS };
+  } else {
+    e = { input: BUILD_BASE_INPUT_TOKENS + Math.ceil(chars / TEXT_CHARS_PER_TOKEN), cacheWrite: 2000, output: 10000 };
+  }
   const inRate = CREDIT_RATES.inRate;
   return Math.ceil(
     (e.input * inRate + e.cacheWrite * inRate * 2 + e.output * CREDIT_RATES.outRate) * CREDIT_RATES.margin,

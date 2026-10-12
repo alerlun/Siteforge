@@ -10,6 +10,12 @@ import { z } from 'https://esm.sh/zod@3.23.8';
 const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-4-6';
 const ANTHROPIC_VERSION = '2023-06-01';
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_OUTPUT_TOKENS = 4096;
+// The element can be up to 50 000 characters, so the estimate follows its size (~2.5 HTML
+// characters per token, plus the system prompt) and reserves the full output budget.
+// Keep in sync with estimateCredits('elementEdit') in src/lib/credits.js.
+const HTML_CHARS_PER_TOKEN = 2.5;
+const BASE_INPUT_TOKENS = 300;
 
 const editElementSchema = z.object({
   siteId:      z.string().uuid(),
@@ -51,7 +57,7 @@ async function callClaude(
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 4096,
+      max_tokens: MAX_OUTPUT_TOKENS,
       temperature: 0.3,
       system,
       messages: [{ role: 'user', content: userContent }],
@@ -111,10 +117,14 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
     if (!apiKey) return errorResponse(500, 'ANTHROPIC_API_KEY not configured');
 
-    // Atomically withhold the estimate (~500 input + 3000 output) before the AI call.
-    // NULL = balance too low. Settled to the real cost on success, refunded on failure.
+    // Atomically withhold the estimate before the AI call. NULL = balance too low.
+    // Settled to the real cost on success, refunded on failure.
     const rates = await getCreditRates(supabase);
-    const estimate = computeCredits({ input_tokens: 500, output_tokens: 3000 }, rates);
+    const inputChars = elementHtml.length + instruction.length + (elementPath?.length ?? 0);
+    const estimate = computeCredits({
+      input_tokens: BASE_INPUT_TOKENS + Math.ceil(inputChars / HTML_CHARS_PER_TOKEN),
+      output_tokens: MAX_OUTPUT_TOKENS,
+    }, rates);
     const { data: reservationId, error: reserveErr } = await supabase.rpc('reserve_credits', {
       p_user_id: user.id, p_amount: estimate, p_action: 'element_edit',
     });

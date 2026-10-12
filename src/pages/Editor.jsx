@@ -134,7 +134,10 @@ export default function Editor() {
   const [showHistory, setShowHistory] = useState(false);
 
   const creditBalance = profile?.credit_balance ?? 0;
-  const canEdit = creditBalance >= estimateCredits('elementEdit');
+  const canEdit = creditBalance >= estimateCredits(
+    'elementEdit',
+    (selectedEl?.outerHtml.length ?? 0) + instruction.length + (selectedEl?.path?.length ?? 0),
+  );
 
   // Load site on mount.
   useEffect(() => {
