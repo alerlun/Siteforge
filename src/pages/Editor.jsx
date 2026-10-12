@@ -119,8 +119,10 @@ export default function Editor() {
   const [html, setHtml] = useState('');
   const [previewUrl, setPreviewUrl] = useState('');
 
-  // History for undo/redo. Each entry is a full HTML string.
+  // History for undo/redo: [{ html, label }]. Stored in site_versions so it survives
+  // leaving the editor; generated_sites.html_output holds the version shown.
   const [history, setHistory] = useState([]);
+  const versionsStoredRef = useRef(false); // site_versions already has rows for this site
   const [historyIdx, setHistoryIdx] = useState(-1);
 
   const [editMode, setEditMode] = useState(false);
@@ -134,6 +136,26 @@ export default function Editor() {
 
   const [device, setDevice] = useState('desktop');
   const [showHistory, setShowHistory] = useState(false);
+  // The navbar scrolls horizontally (overflow-x-auto), which would clip an absolutely
+  // positioned dropdown, so the history menu is fixed to the viewport under its button.
+  const [historyPos, setHistoryPos] = useState(null);
+  const historyBtnRef = useRef(null);
+  const historyMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showHistory) return undefined;
+    const close = (e) => {
+      if (historyMenuRef.current?.contains(e.target) || historyBtnRef.current?.contains(e.target)) return;
+      setShowHistory(false);
+    };
+    const closeNow = () => setShowHistory(false);
+    document.addEventListener('mousedown', close);
+    window.addEventListener('resize', closeNow);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('resize', closeNow);
+    };
+  }, [showHistory]);
 
   const creditBalance = profile?.credit_balance ?? 0;
   const canEdit = creditBalance >= estimateCredits(
@@ -157,8 +179,33 @@ export default function Editor() {
       setSite(data);
       const initialHtml = data.html_output ?? '';
       setHtml(initialHtml);
-      setHistory([initialHtml]);
-      setHistoryIdx(0);
+
+      // Saved versions; if the table is unavailable the editor still works without them.
+      const { data: versions, error: versionsErr } = await supabase
+        .from('site_versions')
+        .select('html, label')
+        .eq('site_id', siteId)
+        .order('created_at', { ascending: true });
+      if (!active) return;
+      if (versionsErr) console.warn('[editor] versions not loaded:', versionsErr.message);
+      const list = versionsErr ? [] : (versions ?? []);
+      versionsStoredRef.current = list.length > 0;
+      if (!list.length) {
+        setHistory([{ html: initialHtml, label: 'Original' }]);
+        setHistoryIdx(0);
+        return;
+      }
+      // Show the saved version that is current; if none matches, list the current one too.
+      let idx = -1;
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].html === initialHtml) { idx = i; break; }
+      }
+      if (idx === -1) {
+        list.push({ html: initialHtml, label: 'Current' });
+        idx = list.length - 1;
+      }
+      setHistory(list);
+      setHistoryIdx(idx);
     })();
     return () => { active = false; };
   }, [siteId, user]);
@@ -205,15 +252,28 @@ export default function Editor() {
     );
   }
 
-  // Push new HTML onto undo history.
-  const pushHistory = useCallback((newHtml) => {
-    setHistory((prev) => {
-      const base = prev.slice(0, historyIdx + 1);
-      return [...base, newHtml];
-    });
-    setHistoryIdx((i) => i + 1);
+  // Append a new version and show it. The list is a saved timeline, so versions after
+  // the current one (after an undo) are kept rather than discarded.
+  const pushHistory = useCallback((newHtml, label) => {
+    setHistory((prev) => [...prev, { html: newHtml, label }]);
+    setHistoryIdx(history.length);
     setHtml(newHtml);
-  }, [historyIdx]);
+  }, [history.length]);
+
+  // Store a version in site_versions. On the first edit the starting version is stored
+  // too, so "Original" is still there next time. Failures only cost the history entry.
+  async function persistVersion(prevHtml, newHtml, label) {
+    if (!user) return;
+    const rows = [];
+    if (!versionsStoredRef.current) rows.push({ site_id: siteId, user_id: user.id, html: prevHtml, label: 'Original' });
+    rows.push({ site_id: siteId, user_id: user.id, html: newHtml, label });
+    const { error } = await supabase.from('site_versions').insert(rows);
+    if (error) {
+      console.warn('[editor] version not stored:', error.message);
+      return;
+    }
+    versionsStoredRef.current = true;
+  }
 
   // Undo/redo/restore move within the history and persist the shown version, so the
   // database (and Chat) match what the editor displays. Saves are debounced so a run of
@@ -222,7 +282,7 @@ export default function Editor() {
   const saveRef = useRef(null);
 
   function goToVersion(idx) {
-    const target = history[idx];
+    const target = history[idx].html;
     setHistoryIdx(idx);
     setHtml(target);
     if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
@@ -320,7 +380,9 @@ export default function Editor() {
         clearTimeout(pendingSaveRef.current.timer);
         pendingSaveRef.current = null;
       }
-      pushHistory(newHtml);
+      const label = instruction.trim().slice(0, 60);
+      pushHistory(newHtml, label);
+      persistVersion(html, newHtml, label);
       await saveToDb(newHtml);
       await refreshProfile();
 
@@ -385,20 +447,32 @@ export default function Editor() {
         <div className="relative">
           <button
             className={`btn text-xs ${showHistory ? 'border-accent text-accent' : ''}`}
-            onClick={() => setShowHistory((v) => !v)}
+            ref={historyBtnRef}
+            onClick={() => {
+              const r = historyBtnRef.current?.getBoundingClientRect();
+              if (r) setHistoryPos({ left: r.left, top: r.bottom + 4 });
+              setShowHistory((v) => !v);
+            }}
           >
             History ({history.length})
           </button>
-          {showHistory && (
-            <div className="absolute left-0 top-full mt-1 z-50 w-56 card shadow-lg">
-              {history.map((_, i) => (
+          {showHistory && historyPos && (
+            <div
+              ref={historyMenuRef}
+              className="fixed z-50 w-56 card shadow-lg max-h-[60vh] overflow-y-auto"
+              style={{ left: historyPos.left, top: historyPos.top }}
+            >
+              {history.map((v, i) => (
                 <button
                   key={i}
                   className={`w-full text-left px-3 py-2 font-mono text-xs hover:bg-surface ${i === historyIdx ? 'text-accent' : 'text-muted'}`}
                   onClick={() => restoreVersion(i)}
+                  title={v.label || undefined}
                 >
-                  {i === 0 ? 'Original' : `Edit ${i}`}
-                  {i === historyIdx && ' ← current'}
+                  <span className="block truncate">
+                    {i === 0 ? (v.label || 'Original') : `${i}. ${v.label || 'Edit'}`}
+                  </span>
+                  {i === historyIdx && <span className="block">← current</span>}
                 </button>
               ))}
             </div>
@@ -466,6 +540,9 @@ export default function Editor() {
             style={{ width: deviceCfg.width, maxWidth: '100%' }}
           >
             <iframe
+              // A new element per version: changing src on the same iframe adds browser
+              // history entries, and Back then lands on an already revoked blob: URL.
+              key={previewUrl}
               ref={iframeRef}
               title="editor-preview"
               src={previewUrl}
