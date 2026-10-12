@@ -14,7 +14,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | # | Allvar | Område | Fynd |
 |---|---|---|---|
 | H1 | ✅ Hög | Pengar | Leads-sökning kan köra obegränsat många Google Places-anrop |
-| H2 | Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
+| H2 | ✅ Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
 | H3 | Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
 | H4 | Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
 | H5 | Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
@@ -44,7 +44,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Kvoten (`leads_used`) räknar bara **sparade** leads. Med standardfiltret "Without website only" hoppas företag med hemsida över. De kostar ändå ett Place Details-anrop var, men räknas inte. En gratisanvändare med 10 leads kvar får `examineCap = 50`. Söker hen på en kategori där alla har hemsida, t.ex. "hotell i Stockholm", blir det 50 Details-anrop och 0 leads. Det kan upprepas 20 gånger/minut (rate limit) utan att kvoten minskar, alltså upp till ~1 000 Details-anrop/minut per konto. Place Details med Contact- och Atmosphere-fält kostar ungefär 0,02–0,03 USD/st. Det kan bli flera hundra dollar per timme från ett enda gratiskonto.
 - **Förslag:** Räkna *undersökta* företag mot en separat månadskvot, eller dra av kvoten per Details-anrop. Sätt ett hårt dagstak per användare och ett globalt dagstak, och lägg in budgetlarm och kvotgräns i Google Cloud (Quotas → Place Details per dag). Sänk `examineCap` för gratiskonton.
 
-### H2. `leads_used` uppdateras inte atomiskt *(kontrollerat)*
+### H2. ✅ `leads_used` uppdateras inte atomiskt *(kontrollerat)*
+> **Åtgärdat 2026-10-12** (kod klar, **väntar på**: 1. granskning + körning av migrationen `20261012130000_reserve_release_leads.sql`, 2. därefter deploy av `scrape-leads`, i den ordningen): ny `reserve_leads(user, antal, gräns)` låser profilraden och tar kvoten före Google-anropen; `release_leads` ger tillbaka oanvänd del på alla utgångar (lyckad sökning, Places-fel, DB-fel, undantag). Gränsen skickas från `PLAN_LIMITS` så den finns kvar på ett ställe.
 - **Område:** Pengar / Race condition
 - **Fil:** `supabase/functions/scrape-leads/index.ts:60-84` (läser) och `:181-184` (skriver `profile.leads_used + inserted.length`)
 - **Problem:** Saldot läses i början och skrivs över i slutet, och en sökning tar flera sekunder (bland annat 2,2 s väntan per sida). Två parallella anrop ser båda "10 kvar", sparar 10 leads var och skriver båda `leads_used = 10`. Med 20 parallella anrop får en gratisanvändare ~200 leads, och Google-kostnaden blir 20×.

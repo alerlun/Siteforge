@@ -37,8 +37,19 @@ interface PlaceDetails {
   };
 }
 
+// Gives back the part of a quota reservation a search did not use.
+async function releaseLeads(userId: string, amount: number): Promise<void> {
+  if (amount <= 0) return;
+  const { error } = await adminClient().rpc('release_leads', { p_user_id: userId, p_amount: amount });
+  if (error) console.error('[scrape-leads] release_leads failed:', userId, amount, error.message);
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+
+  // Quota reserved for this search; whatever is not used is released on every exit path.
+  let reservedFor: string | null = null;
+  let reserved = 0;
 
   try {
     const user = await getUser(req);
@@ -64,7 +75,7 @@ Deno.serve(async (req) => {
     const supabase = adminClient();
     const { data: profile } = await supabase
       .from('profiles')
-      .select('plan, pro_until, leads_used')
+      .select('plan, pro_until')
       .eq('id', user.id)
       .single();
     if (!profile) {
@@ -79,14 +90,21 @@ Deno.serve(async (req) => {
       profile.plan === 'pro' || (profile.pro_until && new Date(profile.pro_until) > new Date())
         ? 'pro' : 'free';
     const limit = PLAN_LIMITS[plan].leads;
-    const remaining = Math.max(0, limit - (profile.leads_used ?? 0));
-    if (remaining <= 0) {
+    // Take the quota atomically before any Google call, so parallel searches cannot all
+    // see the same remaining quota (reserve_leads locks the profile row).
+    const { data: granted, error: reserveErr } = await supabase.rpc('reserve_leads', {
+      p_user_id: user.id, p_amount: cap, p_limit: limit,
+    });
+    if (reserveErr) throw new Error(`reserve_leads: ${reserveErr.message}`);
+    if (!granted) {
       return new Response(
         JSON.stringify({ error: 'limit_reached', plan, limit }),
         { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
-    const fetchTarget = Math.min(cap, remaining);
+    reservedFor = user.id;
+    reserved = granted as number;
+    const fetchTarget = reserved;
     // Hard ceiling on places examined per search to bound Places API spend.
     // Never examine more places than the remaining quota can pay for (see EXAMINED_PER_LEAD).
     const examineCap = Math.min(fetchTarget * EXAMINED_PER_LEAD, 200);
@@ -111,6 +129,7 @@ Deno.serve(async (req) => {
         console.error('[scrape-leads] Places Text Search failed:', pageToken ? 'next page' : 'first page', json.status, json.error_message);
         // A later page failing should not throw away the results already collected.
         if (pageToken && collected.length) break;
+        await releaseLeads(user.id, reserved);
         return errorResponse(502, 'places_api_error', {
           status: json.status,
           message: json.error_message ?? null,
@@ -176,6 +195,7 @@ Deno.serve(async (req) => {
     if (rows.length) {
       const { data, error } = await supabase.from('leads').insert(rows).select();
       if (error) {
+        await releaseLeads(user.id, reserved);
         return new Response(JSON.stringify({ error: error.message }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -184,11 +204,10 @@ Deno.serve(async (req) => {
       inserted = data ?? [];
     }
 
-    const quotaUsed = Math.max(inserted.length, Math.ceil(examined / EXAMINED_PER_LEAD));
-    await supabase
-      .from('profiles')
-      .update({ leads_used: (profile.leads_used ?? 0) + quotaUsed })
-      .eq('id', user.id);
+    // examined <= fetchTarget * EXAMINED_PER_LEAD, so quotaUsed never exceeds the reservation.
+    const quotaUsed = Math.min(reserved, Math.max(inserted.length, Math.ceil(examined / EXAMINED_PER_LEAD)));
+    await releaseLeads(user.id, reserved - quotaUsed);
+    reservedFor = null;
 
     return new Response(
       JSON.stringify({
@@ -201,6 +220,7 @@ Deno.serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {
+    if (reservedFor) await releaseLeads(reservedFor, reserved);
     return fromHttpError(err);
   }
 });
