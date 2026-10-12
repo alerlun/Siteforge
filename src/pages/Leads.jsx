@@ -163,17 +163,27 @@ export default function Leads() {
     });
   }
 
+  // Lead fields come from Google Places (third-party text). A cell starting with = + - @
+  // is run as a formula by Excel/Sheets, so it gets a leading ' (AUDIT-APP.md L13).
+  // Plain phone numbers such as "+46 70 123 45 67" are left as they are.
+  function csvSafe(value) {
+    const v = String(value ?? '');
+    if (!/^[=+\-@\t\r]/.test(v)) return v;
+    if (/^\+?[\d\s()-]+$/.test(v)) return v;
+    return `'${v}`;
+  }
+
   function exportCsv() {
     if (!isPro) return;
     const csv = Papa.unparse(
       rows.map((r) => ({
-        business_name: r.business_name,
-        phone: r.phone ?? '',
-        address: r.address ?? '',
+        business_name: csvSafe(r.business_name),
+        phone: csvSafe(r.phone),
+        address: csvSafe(r.address),
         rating: r.rating ?? '',
         review_count: r.review_count ?? '',
         has_website: r.has_website ? 'yes' : 'no',
-        website_url: r.website_url ?? '',
+        website_url: csvSafe(r.website_url),
         status: r.status ?? '',
       })),
     );
