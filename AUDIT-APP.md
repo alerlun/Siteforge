@@ -160,6 +160,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** På mobil öppnas alltid senaste chatten. Det finns ingen knapp för ny chatt och ingen lista över tidigare chattar. Att generera en sajt för en ny kund kräver att man går via Leads.
 - **Förslag:** Lägg till en "Chattar"-flik eller en bottensheet med SessionsPanel och en "Ny chatt"-knapp i mobilhuvudet.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): mobilhuvudet har en tredje flik "Chats" som visar SessionsPanel i full bredd, med "+ New chat", byte av chatt och radering. Val av chatt eller ny chatt växlar till fliken Chat. Plan-märket döljs på mobil så att flikarna får plats.
+
 ### M11. Lagring av Google Places-data och tredje persons uppgifter *(kontrollerat i kod; juridisk bedömning behövs)*
 - **Område:** Dataskydd / Avtal
 - **Fil:** `supabase/functions/scrape-leads/index.ts:156-171`, `src/pages/Privacy.jsx:19`

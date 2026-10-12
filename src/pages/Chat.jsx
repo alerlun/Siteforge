@@ -319,6 +319,14 @@ export default function Chat() {
           {isMobile ? (
             <div className="flex border border-border" style={{ borderRadius: 2 }}>
               <button
+                onClick={() => setMobileTab('chats')}
+                className={`font-mono text-xs uppercase tracking-wider px-3 py-1.5 transition-colors border-r border-border ${
+                  mobileTab === 'chats' ? 'bg-accent text-black' : 'text-muted'
+                }`}
+              >
+                Chats
+              </button>
+              <button
                 onClick={() => setMobileTab('chat')}
                 className={`font-mono text-xs uppercase tracking-wider px-3 py-1.5 transition-colors ${
                   mobileTab === 'chat' ? 'bg-accent text-black' : 'text-muted'
@@ -340,7 +348,8 @@ export default function Chat() {
           )}
 
           <div className="flex items-center gap-3 shrink-0">
-            <span className="badge border-border text-text">{planLabel}</span>
+            {/* Mobile header holds three tabs; the plan is still shown in Settings. */}
+            {!isMobile && <span className="badge border-border text-text">{planLabel}</span>}
             <button
               className="font-mono text-xs uppercase tracking-wider text-muted hover:text-accent"
               onClick={() => navigate('/app/settings')}
@@ -352,6 +361,18 @@ export default function Chat() {
         </header>
 
         <div className="flex-1 min-h-0 flex">
+          {/* ── Mobile: chat list (the desktop sidebar is hidden on mobile) ── */}
+          {isMobile && mobileTab === 'chats' && (
+            <SessionsPanel
+              sessions={sessions}
+              activeId={activeSessionId}
+              loading={sessionsLoading}
+              onSelect={(id) => { selectSession(id); setMobileTab('chat'); }}
+              onNew={() => { newSession(); setMobileTab('chat'); }}
+              onDelete={deleteSession}
+              width="100%"
+            />
+          )}
           {/* ── Chat panel ── */}
           <section
             className={`flex flex-col min-h-0 ${isMobile ? 'flex-1' : 'shrink-0'} ${
