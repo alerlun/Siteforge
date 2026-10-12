@@ -1,5 +1,6 @@
 // create-checkout — creates a Stripe Checkout session for the Pro plan.
 import { corsHeaders } from '../_shared/cors.ts';
+import { appBaseUrl } from '../_shared/app-url.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
 import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
@@ -21,7 +22,8 @@ Deno.serve(async (req) => {
     const raw = await readBoundedJson(req);
     const parsed = createCheckoutSchema.safeParse(raw);
     if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
-    const baseUrl = parsed.data.origin || req.headers.get('origin') || '';
+    // Only allow-listed origins; a client-chosen URL would make Stripe an open redirect.
+    const baseUrl = appBaseUrl(parsed.data.origin || req.headers.get('origin'));
     const { secretKey: stripeKey, proPriceId: priceId } = await getStripeConfig();
     if (!stripeKey || !priceId) return errorResponse(500, 'Stripe env not configured');
 

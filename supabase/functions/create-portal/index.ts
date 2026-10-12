@@ -1,5 +1,6 @@
 // create-portal — creates a Stripe Billing Portal session.
 import { corsHeaders } from '../_shared/cors.ts';
+import { appBaseUrl } from '../_shared/app-url.ts';
 import { adminClient, getUser } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
 import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
@@ -21,7 +22,8 @@ Deno.serve(async (req) => {
     const raw = await readBoundedJson(req);
     const parsed = createPortalSchema.safeParse(raw);
     if (!parsed.success) return errorResponse(400, 'invalid_input', parsed.error.flatten());
-    const baseUrl = parsed.data.origin || req.headers.get('origin') || '';
+    // Only allow-listed origins; a client-chosen URL would make Stripe an open redirect.
+    const baseUrl = appBaseUrl(parsed.data.origin || req.headers.get('origin'));
     const { secretKey: stripeKey } = await getStripeConfig();
     if (!stripeKey) return errorResponse(500, 'STRIPE_SECRET_KEY not configured');
     const supabase = adminClient();
