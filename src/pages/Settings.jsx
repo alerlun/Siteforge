@@ -71,7 +71,13 @@ export default function Settings() {
       const { url } = await callFunction('create-checkout', { origin: window.location.origin });
       window.location.href = url;
     } catch (e) {
-      setErr(e.message || 'Could not start checkout.');
+      if (e.status === 409) {
+        // Already subscribed (e.g. upgraded in another tab): show the current plan.
+        refreshProfile();
+        setErr('You already have an active Pro subscription.');
+      } else {
+        setErr(e.message || 'Could not start checkout.');
+      }
       setBusy(false);
     }
   }

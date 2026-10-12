@@ -15,7 +15,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 |---|---|---|---|
 | H1 | ✅ Hög | Pengar | Leads-sökning kan köra obegränsat många Google Places-anrop |
 | H2 | ✅ Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
-| H3 | Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
+| H3 | ✅ Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
 | H4 | Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
 | H5 | Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
 | H6 | Hög | Dataskydd | Det går inte att radera sitt konto, trots att integritetspolicyn säger det |
@@ -51,7 +51,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Saldot läses i början och skrivs över i slutet, och en sökning tar flera sekunder (bland annat 2,2 s väntan per sida). Två parallella anrop ser båda "10 kvar", sparar 10 leads var och skriver båda `leads_used = 10`. Med 20 parallella anrop får en gratisanvändare ~200 leads, och Google-kostnaden blir 20×.
 - **Förslag:** Reservera kvoten atomiskt före Google-anropen, på samma sätt som `reserve_credits`. En DB-funktion `reserve_leads(user, n)` gör `update ... set leads_used = leads_used + n where leads_used + n <= limit returning ...`, och oanvänd del ges tillbaka efteråt. Alternativt `leads_used = leads_used + x` i SQL, kombinerat med ett lås per användare.
 
-### H3. Ingen spärr mot dubbla checkouts *(kontrollerat i kod)*
+### H3. ✅ Ingen spärr mot dubbla checkouts *(kontrollerat i kod)*
+> **Åtgärdat 2026-10-12** (kod klar, **väntar på deploy** av `create-checkout` och `stripe-webhook`; inte testat mot Stripe): (1) `create-checkout` svarar 409 `already_subscribed` om kontot redan har en Stripe-prenumeration; Settings visar då ett tydligt meddelande. (2) Stripe-kunden skapas server-side (med idempotensnyckel per användare) och sparas innan sessionen, så alla checkouts använder samma kund och syns i Billing Portal. (3) `customer.subscription.deleted` nedgraderar bara om prenumerations-id:t matchar profilen. Live hade 0 Stripe-kunder, så inget behöver städas. Kvar som möjlig risk: två sessioner som öppnats innan den första betalats kan fortfarande båda betalas; de hamnar nu på samma kund och kan sägas upp i portalen. Stripe kan blockera det helt med inställningen för att begränsa kunder till en prenumeration, om den finns för ert konto.
 - **Område:** Pengar (betala två gånger)
 - **Fil:** `supabase/functions/create-checkout/index.ts:35-48`, `supabase/functions/stripe-webhook/index.ts:97-109`, `:121-135`, migration `20261011140000` (`stripe_apply_checkout`)
 - **Problem:**
