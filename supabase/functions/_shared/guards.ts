@@ -46,6 +46,10 @@ export async function readBoundedJson(req: Request, maxBytes = DEFAULT_MAX_BYTES
   }
 }
 
+// Supabase's gateway replaces X-Forwarded-For with the real client address, so its first
+// value is trustworthy here (verified 2026-10-12: a request sent with a forged
+// X-Forwarded-For was rate-limited under the caller's real IP; AUDIT-APP.md M4).
+// Re-check this if the functions ever run behind a different proxy.
 export function clientIp(req: Request): string {
   const xff = req.headers.get('x-forwarded-for');
   if (xff) return xff.split(',')[0].trim();

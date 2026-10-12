@@ -149,6 +149,7 @@ Deno.serve(async (req) => {
     // Details for each. Filter to website-less businesses only.
     const detailFields = 'name,formatted_address,formatted_phone_number,international_phone_number,rating,user_ratings_total,website';
     const enriched = [] as Array<{
+      place_id: string;
       business_name: string;
       phone: string | null;
       address: string | null;
@@ -160,9 +161,30 @@ Deno.serve(async (req) => {
     }>;
     let examined = 0;
     let skippedHasWebsite = 0;
+
+    // Places the user already has as leads: skipped before the Details call, so a repeated
+    // or overlapping search neither saves duplicates nor costs quota or Details requests.
+    const known = new Set<string>();
+    const placeIds = collected.map((p) => p.place_id).filter((id): id is string => !!id);
+    if (placeIds.length) {
+      const { data: existing, error: existingErr } = await supabase
+        .from('leads')
+        .select('place_id')
+        .eq('user_id', user.id)
+        .in('place_id', placeIds);
+      if (existingErr) throw new Error(`known leads: ${existingErr.message}`);
+      for (const row of existing ?? []) if (row.place_id) known.add(row.place_id);
+    }
+    let skippedKnown = 0;
+
     for (const place of collected) {
       if (enriched.length >= fetchTarget) break;
       if (!place.place_id) continue;
+      if (known.has(place.place_id)) {
+        skippedKnown++;
+        continue;
+      }
+      known.add(place.place_id); // Text Search pages can repeat a place
       examined++;
       const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=${detailFields}&key=${apiKey}`;
       let details: PlaceDetails['result'] | undefined;
@@ -179,6 +201,7 @@ Deno.serve(async (req) => {
         continue;
       }
       enriched.push({
+        place_id: place.place_id,
         business_name: details?.name ?? place.name ?? 'Unknown',
         phone: details?.formatted_phone_number ?? details?.international_phone_number ?? null,
         address: details?.formatted_address ?? place.formatted_address ?? null,
@@ -193,7 +216,11 @@ Deno.serve(async (req) => {
     const rows = enriched.map((r) => ({ ...r, user_id: user.id, status: 'new' }));
     let inserted: any[] = [];
     if (rows.length) {
-      const { data, error } = await supabase.from('leads').insert(rows).select();
+      // ON CONFLICT DO NOTHING: a concurrent search may have saved the same place meanwhile.
+      const { data, error } = await supabase
+        .from('leads')
+        .upsert(rows, { onConflict: 'user_id,place_id', ignoreDuplicates: true })
+        .select();
       if (error) {
         await releaseLeads(user.id, reserved);
         return new Response(JSON.stringify({ error: error.message }), {
@@ -215,6 +242,7 @@ Deno.serve(async (req) => {
         count: inserted.length,
         examined,
         skippedHasWebsite,
+        skippedKnown,
         quotaUsed,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },

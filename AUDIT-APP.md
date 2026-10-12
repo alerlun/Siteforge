@@ -92,11 +92,15 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** I förhandsvisningen körs sajten säkert (sandlåda utan `allow-same-origin`). "Fullscreen" öppnar däremot samma HTML som en `blob:`-URL i en ny flik **utan sandlåda**. En blob-URL ärver skaparens origin, alltså appens, och skript i den kan läsa `localStorage` med Supabase-sessionen. `noopener` skyddar inte mot det. `'unsafe-inline'` i CSP:n tillåter inline-skript, och `img-src https:` gör det lätt att skicka ut token. Den genererade HTML:en påverkas av prompten, som i sin tur innehåller Google Places-data (företagsnamn, adress) som tredje part styr. En prompt injection via ett företagsnamn kan alltså i värsta fall ge kontoövertagande. Kommentaren på `Chat.jsx:81-87` antar att blob-dokument är isolerade, men det gäller bara inuti iframen.
 - **Förslag:** Öppna helskärm som en egen route i appen (t.ex. `/app/preview/:siteId`) som visar sajten i en helskärms-iframe med samma `sandbox` som förhandsvisningen. Ta bort `'unsafe-inline'` från `script-src`; appen har inga inline-skript, och `analytics.js` laddar gtag externt.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare med inloggat konto): "Fullscreen" öppnar inte längre en ny flik. Samma sandlådade iframe visas i ett helskärmsöverlägg (webbläsarens helskärm när det går), stängs med Esc eller knappen. **Inte gjort:** att ta bort `'unsafe-inline'` ur CSP:n. Moderna webbläsare låter `blob:`-dokument ärva skaparens CSP, så förhandsvisningens inline-skript och Editorns injicerade markeringsskript kan sluta fungera. Det måste testas mot en Vercel-preview innan det ändras.
+
 ### M2. Webhooken ger Pro utan att kontrollera betalstatus *(trolig)*
 - **Område:** Pengar
 - **Fil:** `supabase/functions/stripe-webhook/index.ts:97-109`
 - **Problem:** `checkout.session.completed` behandlas som betald. Med asynkrona betalmetoder (SEPA, Klarna, Bancontact m.fl.) kan `payment_status` vara `unpaid` när händelsen kommer. Användaren får då Pro och 680 000 credits innan pengarna kommit in, och behåller saldot även om betalningen misslyckas. Hur stor risken är beror på vilka betalmetoder som är påslagna i Stripe; bara kort ger `paid` direkt. Återbetalningar och tvister (`charge.refunded`, `charge.dispute.created`) hanteras inte heller.
 - **Förslag:** Tillämpa bara om `session.payment_status` är `paid` eller `no_payment_required`. Hantera `checkout.session.async_payment_succeeded`. Alternativt: begränsa Checkout till kort (`payment_method_types[]=card`).
+
+> **Åtgärdat 2026-10-12** (`stripe-webhook` **deployad 2026-10-12** (v26); inte testat mot Stripe): `checkout.session.completed` uppgraderar bara när `payment_status` är `paid` eller `no_payment_required`. Annars väntar uppgraderingen på `checkout.session.async_payment_succeeded`, som hanteras på samma sätt. En misslyckad fördröjd betalning uppgraderar aldrig. **Kräver** att webhook-endpointen i Stripe också prenumererar på `checkout.session.async_payment_succeeded` (test och live). **Inte gjort:** återbetalningar och tvister (`charge.refunded`, `charge.dispute.created`) hanteras fortfarande manuellt.
 
 ### M3. Obegränsat antal gratiskonton *(kontrollerat i kod)*
 - **Område:** Pengar
@@ -104,11 +108,15 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Varje nytt konto får 68 000 credits (ungefär en sajt), och det finns ingen captcha eller enhets- eller IP-spärr. Med Google OAuth eller engångsadresser kan man skapa många konton. Värvningsbonusen (5 konton som var och en genererar en sajt ger en månad Pro = 680 000 credits) kan farmas på samma sätt, eftersom IP-skyddet är svagt (M4).
 - **Förslag:** Slå på Supabase Auth captcha (hCaptcha/Turnstile) och e-postbekräftelse. Överväg att ge gratiskrediterna först efter bekräftad e-post, eller en lägre startsumma. Kräv för värvningsbonus att det värvade kontot är verifierat och har fler än en åtgärd.
 
+> **Åtgärdat i kod 2026-10-12** (frontend, väntar på Vercel-deploy; widgeten testad lokalt med Cloudflares testnyckel): ny `Captcha.jsx` (Cloudflare Turnstile) på Signup och Login; token skickas vid registrering, inloggning med lösenord och "Forgot password?". Knapparna är låsta tills captcha är klar. Utan `VITE_TURNSTILE_SITE_KEY` visas ingen widget och allt fungerar som förut. "Change Password" i Settings går nu direkt till `/reset-password` (inloggad användare, `updateUser`, ingen captcha behövs). CSP tillåter `challenges.cloudflare.com`. **Kräver** (i den här ordningen, se `supabase/README.md` 3b): Turnstile-widget i Cloudflare → site key i Vercel → deploy → captcha + "Confirm email" på i Supabase. **Inte gjort:** Google OAuth täcks inte av captcha; credits ges fortfarande vid signup (inte först efter bekräftad e-post); värvningskrav oförändrade.
+
 ### M4. IP läses från `X-Forwarded-For` *(kontrollerat)*
 - **Område:** Säkerhet (rate limiting, missbruk)
 - **Fil:** `supabase/functions/_shared/guards.ts:49-53`
 - **Problem:** `clientIp()` tar första värdet i `X-Forwarded-For`, och det värdet sätter klienten själv. IP-baserad rate limiting (`enforce(..., clientIp(req))`) kringgås genom att skicka ett nytt värde varje gång. Gränsen per användare finns kvar för inloggade funktioner, men `stripe-webhook` har bara IP-gräns. Värvningsskyddet mot samma IP (`claim-referral`) påverkas också. Se `ARKITEKTUR.md` 8.3 punkt 13.
 - **Förslag:** Använd det värde Supabase edge-plattformen själv sätter (`cf-connecting-ip` först, eller sista värdet i `X-Forwarded-For` som lagts till av betrodd proxy). Verifiera med en loggad testrequest vilket header-värde som är pålitligt.
+
+> **Kontrollerat 2026-10-12, ingen kodändring behövs:** testanrop mot `stripe-webhook` med förfalskad `X-Forwarded-For` (`203.0.113.77`, och `198.51.100.9, 203.0.113.5` plus `X-Real-IP`) räknades i `rate_limits` under anroparens riktiga IP (`webhook:<riktig IP>`, count 1 → 2). Supabase-gatewayn skriver alltså över headern, och första värdet går att lita på. En förfalskad `CF-Connecting-IP` stoppas med 403 innan funktionen. Kommentar om detta tillagd i `guards.ts` (ingen deploy behövs). Fyndet gäller bara om funktionerna flyttas bakom en annan proxy.
 
 ### M5. Editor visar "Saved" även när sparningen misslyckas *(kontrollerat)*
 - **Område:** Bugg (dataförlust)
@@ -116,11 +124,15 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `saveToDb` ignorerar `error` från `update` och visar alltid "Saved". Vid nätverksfel eller utgången session har användaren betalat för element-ändringen men förlorar den när sidan stängs.
 - **Förslag:** Kontrollera `error`, visa fel och en "Försök igen"-knapp, och varna vid `beforeunload` om osparade ändringar finns.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): `saveToDb` kontrollerar fel och att en rad faktiskt uppdaterades (RLS ger 0 rader i stället för fel). Vid fel visas "Not saved" med en "Retry"-knapp (felmeddelandet som tooltip), och sidan varnar vid stängning så länge ändringen inte är sparad. Kontrollerat i DB: `authenticated` har UPDATE på `generated_sites.html_output` och RLS-policyn `auth.uid() = user_id` gäller.
+
 ### M6. Ångra/gör om/återställ version i Editor sparas aldrig *(kontrollerat)*
 - **Område:** Bugg
 - **Fil:** `src/pages/Editor.jsx:213-231`
 - **Problem:** `undo`, `redo` och `restoreVersion` ändrar bara det lokala tillståndet. Databasen har kvar den senaste AI-ändringen. Den som ångrar, lämnar Editor och öppnar Chat eller Editor igen ser den ångrade versionen. Historiken försvinner vid omladdning.
 - **Förslag:** Spara efter undo/redo/restore (eventuellt med debounce), eller visa en tydlig "Spara"-knapp med osparad-markering.
+
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): ångra, gör om och återställ version sparar nu den version som visas, med 600 ms fördröjning så att flera klick i rad blir en skrivning. En väntande sparning skickas direkt när man lämnar Editor inom appen, webbläsaren varnar vid stängning medan den väntar, och en ny AI-ändring avbryter den så att den inte skrivs över. Fel visas med "Not saved"/"Retry" (M5). **Inte gjort:** historiken sparas inte mellan omladdningar; det kräver lagring i DB.
 
 ### M7. Pro via värvning visar "Manage Billing", som alltid ger fel *(kontrollerat)*
 - **Område:** Bugg / Pengar (förlorad försäljning)
@@ -128,11 +140,15 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `isProUser()` räknar `pro_until` som Pro. En användare som fått Pro via värvning ser därför "Manage Billing", som svarar 400 "No Stripe customer on file", och har ingen väg att köpa Pro under eller efter perioden förrän den gått ut.
 - **Förslag:** Visa "Manage Billing" bara om `stripe_customer_id` finns. Visa annars "Pro till <datum>" och en "Upgrade"-knapp.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): "Manage Billing" visas bara när kontot har en Stripe-prenumeration (`stripe_subscription_id`). Pro via värvning visar "until <datum>" under planen och "Upgrade to Pro" (`create-checkout` blockerar bara konton med prenumeration). Manuellt satt Pro utan prenumeration och utan `pro_until` (2 konton i live) visar ingen knapp.
+
 ### M8. Stats räknar varje sajtversion som en egen sajt *(kontrollerat)*
 - **Område:** Bugg (fel statistik)
 - **Fil:** `src/pages/Stats.jsx:19-35`; `generate-site/index.ts:641-645` skapar en ny rad per chatt-ändring
 - **Problem:** "Total sites generated" och konverteringsgraden räknar varje chatt-ändring som en ny sajt. Fem ändringar av en sajt ger 6 sajter och en sjättedel så hög konvertering. Sålda sajter markeras dessutom på en enskild version.
 - **Förslag:** Räkna per `session_id` (senaste versionen per session), eller lägg status och pris på `chat_sessions` i stället.
+
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): Stats slår ihop versioner per `session_id` i klienten. En sajt visas med senaste versionens uppgifter, räknas från första versionens datum och räknas som såld om någon version är markerad såld (det är den versionen "Mark Sold"/"Edit" ändrar). Rader utan session räknas var för sig. Ingen DB-ändring. Live idag: 12 rader, 8 utan session och 4 sessioner med en version var, så siffrorna ändras inte förrän någon gör chatt-ändringar.
 
 ### M9. Samma företag kan sparas som lead flera gånger *(kontrollerat)*
 - **Område:** Bugg / Pengar (användarens kvot)
@@ -140,17 +156,23 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `place_id` sparas inte, och dubbletter filtreras inte bort. Två liknande sökningar ("frisör Karlstad" och "frisörer Karlstad") sparar samma företag igen och drar av kvoten två gånger.
 - **Förslag:** Spara `place_id` (det är också den enda Places-data Google tillåter att lagras utan tidsgräns, se M11), lägg till ett unikt index `(user_id, place_id)`, hoppa över kända place_id innan Details-anropet och räkna bara nya.
 
+> **Åtgärdat 2026-10-12** (**deployad 2026-10-12**: migration körd och verifierad, `scrape-leads` v30; inte testat med en riktig sökning): migration `20261012150000_leads_place_id.sql` lägger till `leads.place_id` och ett unikt index `(user_id, place_id)`. `scrape-leads` hämtar användarens redan sparade place_id innan Details-anropen, hoppar över dem (ingen kvot, inget Details-anrop), sparar `place_id` och skriver med `ON CONFLICT DO NOTHING` för samtidiga sökningar. Leads-sidan visar hur många som redan fanns. **Ordning:** migrationen före funktionen, annars svarar `scrape-leads` med fel. Befintliga leads saknar `place_id` och kan därför inte dubblettkontrolleras.
+
 ### M10. På mobil går det inte att byta chatt eller starta en ny *(kontrollerat)*
 - **Område:** UX / Mobil
 - **Fil:** `src/pages/Chat.jsx:285-298` (SessionsPanel bara när `!isMobile`)
 - **Problem:** På mobil öppnas alltid senaste chatten. Det finns ingen knapp för ny chatt och ingen lista över tidigare chattar. Att generera en sajt för en ny kund kräver att man går via Leads.
 - **Förslag:** Lägg till en "Chattar"-flik eller en bottensheet med SessionsPanel och en "Ny chatt"-knapp i mobilhuvudet.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): mobilhuvudet har en tredje flik "Chats" som visar SessionsPanel i full bredd, med "+ New chat", byte av chatt och radering. Val av chatt eller ny chatt växlar till fliken Chat. Plan-märket döljs på mobil så att flikarna får plats.
+
 ### M11. Lagring av Google Places-data och tredje persons uppgifter *(kontrollerat i kod; juridisk bedömning behövs)*
 - **Område:** Dataskydd / Avtal
 - **Fil:** `supabase/functions/scrape-leads/index.ts:156-171`, `src/pages/Privacy.jsx:19`
 - **Problem:** Namn, adress, telefon och betyg från Google Places sparas permanent och kan exporteras som CSV. Google Maps Platforms villkor tillåter i regel bara att `place_id` lagras permanent; övrig data får bara cachas tillfälligt. Leads är dessutom ofta personuppgifter om tredje person (enskilda firmor: namn och telefon). Integritetspolicyn beskriver inte rättslig grund, lagringstid eller hur de berörda informeras.
 - **Förslag:** Läs igenom Googles villkor ("Caching" i Places API Policies). Spara `place_id` och hämta detaljer på nytt vid behov, eller rensa detaljer efter 30 dagar. Dokumentera rättslig grund (berättigat intresse) och lagringstid i policyn, och lägg till radering av leads.
+
+> **Delvis åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): Leads-sidan har kryssrutor, "Delete N" för markerade och "Delete" i detaljraden (med bekräftelse). RLS tillåter redan radering (`leads self all`), och `chat_sessions.lead_id` sätts till null, så chattar finns kvar. Integritetspolicyn har ett nytt avsnitt om lead-data: källa, rättslig grund (berättigat intresse), lagring tills användaren raderar, och att företag kan begära borttagning. **Kvar (juridisk bedömning):** Googles villkor för cachning; Places-detaljerna lagras fortfarande permanent. Ett alternativ är att rensa detaljer efter 30 dagar och behålla `place_id` (nu sparat, M9). Policytexten är en mall, inte juridisk rådgivning.
 
 ### M12. Google Analytics laddas före samtycke och "Accept" ger annonssamtycke *(kontrollerat)*
 - **Område:** Dataskydd (ePrivacy/GDPR)
@@ -160,6 +182,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
   - "Accept" (analys) sätter även `ad_storage`, `ad_user_data` och `ad_personalization` till `granted`, alltså mer än användaren godkänt.
   - `page_location` skickar hela URL:en, inklusive `?ref=SF-XXXXXX`.
 - **Förslag:** Ladda gtag först efter "Accept". Ge bara `analytics_storage: 'granted'` och låt ad-signalerna vara nekade. Ta bort query-strängen från `page_location`.
+
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; **testat** mot lokal produktionsbuild med headless Chromium): `gtag.js` hämtas först efter "Accept" (eller vid tidigare sparat "granted"); före svar och efter "Decline" går inga anrop till Google. Consent-läget är `analytics_storage: granted` och alla ad-signaler `denied`. `page_view` skickas utan query-sträng (`?ref=SF-TEST01` syntes inte i `page_location`), och sidan man accepterar på får en page view direkt.
 
 ---
 

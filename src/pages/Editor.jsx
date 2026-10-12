@@ -129,6 +129,8 @@ export default function Editor() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [unsavedHtml, setUnsavedHtml] = useState(null);
 
   const [device, setDevice] = useState('desktop');
   const [showHistory, setShowHistory] = useState(false);
@@ -213,34 +215,78 @@ export default function Editor() {
     setHtml(newHtml);
   }, [historyIdx]);
 
+  // Undo/redo/restore move within the history and persist the shown version, so the
+  // database (and Chat) match what the editor displays. Saves are debounced so a run of
+  // undo clicks writes once; a pending save is flushed when the editor unmounts.
+  const pendingSaveRef = useRef(null); // { timer, html }
+  const saveRef = useRef(null);
+
+  function goToVersion(idx) {
+    const target = history[idx];
+    setHistoryIdx(idx);
+    setHtml(target);
+    if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
+    const timer = setTimeout(() => {
+      pendingSaveRef.current = null;
+      saveRef.current(target);
+    }, 600);
+    pendingSaveRef.current = { timer, html: target };
+  }
+
+  useEffect(() => () => {
+    const pending = pendingSaveRef.current;
+    if (pending) {
+      clearTimeout(pending.timer);
+      saveRef.current(pending.html);
+    }
+  }, []);
+
   function undo() {
     if (historyIdx <= 0) return;
-    const idx = historyIdx - 1;
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(historyIdx - 1);
   }
 
   function redo() {
     if (historyIdx >= history.length - 1) return;
-    const idx = historyIdx + 1;
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(historyIdx + 1);
   }
 
   function restoreVersion(idx) {
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(idx);
     setShowHistory(false);
   }
 
+  // Persist the edited HTML. On failure the HTML is kept in `unsavedHtml` so the user can
+  // retry, and leaving the page warns (the edit was already paid for in credits).
   async function saveToDb(newHtml) {
-    await supabase
+    setSaveError('');
+    const { data, error } = await supabase
       .from('generated_sites')
       .update({ html_output: newHtml })
-      .eq('id', siteId);
+      .eq('id', siteId)
+      .select('id');
+    // RLS filters rows instead of erroring, so zero updated rows is also a failure.
+    if (error || !data?.length) {
+      setUnsavedHtml(newHtml);
+      setSaveError(error?.message || 'Could not save the change.');
+      return;
+    }
+    setUnsavedHtml(null);
     setSavedMsg('Saved');
     setTimeout(() => setSavedMsg(''), 2000);
   }
+
+  saveRef.current = saveToDb;
+
+  useEffect(() => {
+    const warn = (e) => {
+      if (unsavedHtml === null && !pendingSaveRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [unsavedHtml]);
 
   async function applyEdit(e) {
     e.preventDefault();
@@ -268,6 +314,11 @@ export default function Editor() {
           target.outerHTML = updatedHtml;
           newHtml = '<!DOCTYPE html>' + doc.documentElement.outerHTML;
         }
+      }
+      // A pending undo/redo save must not overwrite this edit.
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current.timer);
+        pendingSaveRef.current = null;
       }
       pushHistory(newHtml);
       await saveToDb(newHtml);
@@ -381,6 +432,14 @@ export default function Editor() {
 
         {savedMsg && (
           <span className="font-mono text-xs text-accent">{savedMsg}</span>
+        )}
+        {unsavedHtml !== null && (
+          <span className="font-mono text-xs text-accent flex items-center gap-2" title={saveError}>
+            Not saved
+            <button className="btn text-xs px-2 py-1" onClick={() => saveToDb(unsavedHtml)}>
+              Retry
+            </button>
+          </span>
         )}
 
         <span

@@ -18,10 +18,10 @@ export default function Stats() {
     (async () => {
       const { data } = await supabase
         .from('generated_sites')
-        .select('id, business_name, business_type, client_location, sale_price, status, created_at')
+        .select('id, session_id, business_name, business_type, client_location, sale_price, status, created_at')
         .order('created_at', { ascending: false });
       if (!active) return;
-      setSites(data ?? []);
+      setSites(groupBySession(data ?? []));
       setLoading(false);
     })();
     return () => { active = false; };
@@ -39,7 +39,11 @@ export default function Stats() {
   const monthlyRevenue = useMemo(() => buildLast6Months(sites, 'revenue'), [sites]);
 
   function applyUpdate(updated) {
-    setSites((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+    // Merge only what the sale modal edits; keep the session's first-version date.
+    const { sale_price, business_type, business_name, status } = updated;
+    setSites((prev) => prev.map((s) => (
+      s.id === updated.id ? { ...s, sale_price, business_type, business_name, status } : s
+    )));
   }
 
   return (
@@ -162,6 +166,35 @@ function Chart({ title, children }) {
       {children}
     </div>
   );
+}
+
+// Every chat edit stores a new generated_sites row, so one site = one chat session.
+// Collapse versions to one entry per session: shown with the latest version's details,
+// counted from the first version's date, and sold if any version was marked sold (that
+// version is the one the sale modal edits). Rows without a session stay separate.
+function groupBySession(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = row.session_id ?? `site:${row.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  const sites = [];
+  for (const versions of groups.values()) {
+    // rows arrive newest first
+    const latest = versions[0];
+    const first = versions[versions.length - 1];
+    const sold = versions.find((v) => v.status === 'sold');
+    const target = sold ?? latest;
+    sites.push({
+      ...latest,
+      id: target.id,
+      status: target.status,
+      sale_price: target.sale_price,
+      created_at: first.created_at,
+    });
+  }
+  return sites;
 }
 
 function buildLast6Months(sites, kind) {

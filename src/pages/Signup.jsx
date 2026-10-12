@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../lib/supabase.js';
 import { storePendingReferral } from '../lib/referral.js';
+import Captcha, { CAPTCHA_SITE_KEY } from '../components/Captcha.jsx';
 
 export default function Signup() {
   const [email, setEmail] = useState('');
@@ -9,6 +10,8 @@ export default function Signup() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [info, setInfo] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaRef = useRef(null);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const refCode = searchParams.get('ref')?.trim().toUpperCase() || null;
@@ -28,9 +31,11 @@ export default function Signup() {
       options: {
         emailRedirectTo: `${window.location.origin}/app/chat`,
         data: refCode ? { referral_code: refCode } : undefined,
+        captchaToken: captchaToken || undefined,
       },
     });
     setBusy(false);
+    captchaRef.current?.reset();
     if (error) return setErr(error.message);
     if (data?.session) {
       navigate('/app/chat', { replace: true });
@@ -69,9 +74,12 @@ export default function Signup() {
             <div className="label mb-1">Password</div>
             <input className="input" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
+          <Captcha ref={captchaRef} onToken={setCaptchaToken} />
           {err && <div className="font-mono text-xs text-accent">{err}</div>}
           {info && <div className="font-mono text-xs text-muted">{info}</div>}
-          <button className="btn-primary w-full" disabled={busy}>{busy ? 'creating…' : 'Sign Up'}</button>
+          <button className="btn-primary w-full" disabled={busy || (CAPTCHA_SITE_KEY && !captchaToken)}>
+            {busy ? 'creating…' : 'Sign Up'}
+          </button>
         </form>
         <div className="my-6 flex items-center gap-3">
           <div className="flex-1 h-px bg-border" />

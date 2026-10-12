@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
@@ -26,7 +26,14 @@ export default function Settings() {
     }
   }, [upgraded, refreshProfile, setParams]);
 
+  const navigate = useNavigate();
   const isPro = isProUser(profile);
+  // Only a Stripe subscription has a billing portal. Pro from referrals (pro_until) has
+  // none, so it gets the upgrade button instead of a portal call that always fails.
+  const hasSubscription = !!profile?.stripe_subscription_id;
+  const proUntil = !hasSubscription && profile?.pro_until && new Date(profile.pro_until) > new Date()
+    ? profile.pro_until
+    : null;
   const planLabel = isPro ? 'PRO PLAN' : 'FREE PLAN';
   const leadsLimit = isPro ? 100 : 10;
   const leadsUsed = profile?.leads_used ?? 0;
@@ -133,17 +140,10 @@ export default function Settings() {
     }
   }
 
-  async function changePassword() {
-    if (!user?.email) return;
-    setBusy(true);
-    setErr('');
-    setInfo('');
-    const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    setBusy(false);
-    if (error) setErr(error.message);
-    else setInfo('Password reset email sent.');
+  // The user is signed in, so the new password is set directly on /reset-password
+  // (updateUser). Sending a reset email would need a captcha token once captcha is on.
+  function changePassword() {
+    navigate('/reset-password');
   }
 
   return (
@@ -161,10 +161,13 @@ export default function Settings() {
             <div>
               <div className="label">current plan</div>
               <div className="mt-2 font-mono text-2xl">{planLabel}</div>
+              {proUntil && (
+                <div className="mt-1 font-mono text-xs text-muted">until {formatDate(proUntil)}</div>
+              )}
             </div>
-            {isPro ? (
+            {hasSubscription ? (
               <button className="btn" disabled={busy} onClick={openPortal}>Manage Billing</button>
-            ) : (
+            ) : isPro && !proUntil ? null /* Pro set manually: nothing to buy or manage */ : (
               <button className="btn-primary" disabled={busy} onClick={startCheckout}>
                 {busy ? '…' : 'Upgrade to Pro'}
               </button>
