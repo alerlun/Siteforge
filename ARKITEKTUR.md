@@ -255,18 +255,18 @@ Alla funktioner utom `stripe-webhook` validerar själva bearer-token med `getUse
 | Funktion | verify_jwt i `config.toml` | verify_jwt live | Egen auth | Rate limit |
 |---|---|---|---|---|
 | generate-site | true | true (sedan deploy 2026-10-11) | `getUser` | 10/min IP + användare |
-| edit-element | (ej angiven) | true | `getUser` + ägarkontroll av sajt | delar `generate`-gränsen |
+| edit-element | true | true | `getUser` + ägarkontroll av sajt | delar `generate`-gränsen |
 | scrape-leads | true | true | `getUser` | 20/min |
 | create-checkout | true | true | `getUser` | 10/min |
 | create-portal | true | true | `getUser` | 10/min |
 | stripe-webhook | false | false | Stripe-signatur | 120/min IP |
-| claim-referral | (ej angiven) | false | `getUser`, 1 h-fönster efter signup | – |
-| generate-referral-code | (ej angiven) | false | `getUser` | – |
-| referral-stats | (ej angiven) | false | `getUser` | – |
+| claim-referral | true | true (sedan 2026-10-12) | `getUser`, 1 h-fönster efter signup | – |
+| generate-referral-code | true | true (sedan 2026-10-12) | `getUser` | – |
+| referral-stats | true | true (sedan 2026-10-12) | `getUser` | – |
 
 Rate limiting är fail-open (DB-fel → anropet släpps igenom). CORS är `*`.
 
-Funktioner som saknas i `config.toml` får standardvärdet `verify_jwt = true` vid nästa `supabase functions deploy`. För `edit-element` stämmer det med live; för de tre värvningsfunktionerna (live `false`) ändras beteendet vid nästa deploy (se 8.3 punkt 20).
+Alla funktioner har nu ett uttryckligt `verify_jwt` i `config.toml`, och `config.toml` = live för samtliga (verifierat 2026-10-12).
 
 ### 6.3 RLS – vem får läsa/skriva vad (roll `authenticated`)
 
@@ -315,7 +315,7 @@ Inga värden anges här.
 
 ## 8. Avvikelser och risker som hittades
 
-Status 2026-10-12: punkt 1–12 och 17–19 är åtgärdade (✅). Kvar: 10 (delvis), 13, 14, 16, 20 och 21–29 (8.4).
+Status 2026-10-12: punkt 1–12, 17–20 är åtgärdade (✅). Kvar: 10 (delvis), 13, 14, 16 och 21–29 (8.4).
 
 ### 8.1 Säkerhet
 
@@ -351,7 +351,7 @@ Status 2026-10-12: punkt 1–12 och 17–19 är åtgärdade (✅). Kvar: 10 (del
 14. `config.stripe_webhook_secret` lagrar en hemlighet i DB som ingen kod läser.
 15. ~~`CLAUDE.md` och arbetsreglerna angav olika rutiner för DB-ändringar.~~ Löst 2026-10-07: migrationsfiler i `supabase/migrations/`, och `schema.sql` är fryst. `CLAUDE.md`, `supabase/README.md` och `schema.sql`-huvudet säger nu samma sak (se avsnitt 2).
 16. `.env.example` anger `ANTHROPIC_MODEL=claude-sonnet-4-5`, koden har default `claude-sonnet-4-6`. Sidebar visar `v1.0.1`, `package.json` säger `1.1.0`.
-20. **Ny 2026-10-12:** `claim-referral`, `generate-referral-code` och `referral-stats` saknas i `config.toml` men har `verify_jwt = false` live. Nästa deploy av någon av dem slår på gateway-kontrollen (`true`). Troligen ofarligt (de kräver redan en giltig token via `getUser`), men live och repo skiljer sig. Bör antingen läggas in i `config.toml` med önskat värde eller deployas om medvetet.
+20. ✅ **Åtgärdad 2026-10-12** (alla fyra inlagda i `config.toml` med `true`, värvningsfunktionerna omdeployade, utan token → 401, CORS-preflight → 200). ~~ `claim-referral`, `generate-referral-code` och `referral-stats` saknas i `config.toml` men har `verify_jwt = false` live. Nästa deploy av någon av dem slår på gateway-kontrollen (`true`). Troligen ofarligt (de kräver redan en giltig token via `getUser`), men live och repo skiljer sig. Bör antingen läggas in i `config.toml` med önskat värde eller deployas om medvetet.~~
 
 ### 8.4 Öppna fynd från kodgranskningen 2026-10-11 (ej åtgärdade)
 
