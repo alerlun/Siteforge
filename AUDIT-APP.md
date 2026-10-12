@@ -172,6 +172,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Namn, adress, telefon och betyg från Google Places sparas permanent och kan exporteras som CSV. Google Maps Platforms villkor tillåter i regel bara att `place_id` lagras permanent; övrig data får bara cachas tillfälligt. Leads är dessutom ofta personuppgifter om tredje person (enskilda firmor: namn och telefon). Integritetspolicyn beskriver inte rättslig grund, lagringstid eller hur de berörda informeras.
 - **Förslag:** Läs igenom Googles villkor ("Caching" i Places API Policies). Spara `place_id` och hämta detaljer på nytt vid behov, eller rensa detaljer efter 30 dagar. Dokumentera rättslig grund (berättigat intresse) och lagringstid i policyn, och lägg till radering av leads.
 
+> **Delvis åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): Leads-sidan har kryssrutor, "Delete N" för markerade och "Delete" i detaljraden (med bekräftelse). RLS tillåter redan radering (`leads self all`), och `chat_sessions.lead_id` sätts till null, så chattar finns kvar. Integritetspolicyn har ett nytt avsnitt om lead-data: källa, rättslig grund (berättigat intresse), lagring tills användaren raderar, och att företag kan begära borttagning. **Kvar (juridisk bedömning):** Googles villkor för cachning; Places-detaljerna lagras fortfarande permanent. Ett alternativ är att rensa detaljer efter 30 dagar och behålla `place_id` (nu sparat, M9). Policytexten är en mall, inte juridisk rådgivning.
+
 ### M12. Google Analytics laddas före samtycke och "Accept" ger annonssamtycke *(kontrollerat)*
 - **Område:** Dataskydd (ePrivacy/GDPR)
 - **Fil:** `src/lib/analytics.js:31-56`, `:63-68`, `:85-88`

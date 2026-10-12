@@ -6,7 +6,7 @@ const CONTACT = 'alerlunai@gmail.com';
 
 export default function Privacy() {
   return (
-    <LegalLayout title="Privacy Policy" lastUpdated="June 3, 2026">
+    <LegalLayout title="Privacy Policy" lastUpdated="October 12, 2026">
       <p>
         This policy explains what SiteForge collects, why, and the choices you have. By
         using SiteForge you agree to the handling of information described here.
@@ -34,6 +34,21 @@ export default function Privacy() {
       <LegalSection heading="How we use information">
         <p>To operate the service, generate sites, enforce plan limits, process payments,
           provide support, and improve the product. We do not sell your personal data.</p>
+      </LegalSection>
+
+      <LegalSection heading="Business lead data">
+        <p>
+          Lead searches return public business listings from Google Places: business name,
+          address, phone number, rating and website. For sole traders this can include
+          personal data about the business owner. We process it on the basis of legitimate
+          interest: helping you contact local businesses about a website, using only
+          information the business has published itself.
+        </p>
+        <p className="mt-2">
+          Leads are stored in your account until you delete them (individually or in bulk on
+          the Leads page) or delete your account. A business that wants its listing removed
+          can contact us at the address below, and we will delete it.
+        </p>
       </LegalSection>
 
       <LegalSection heading="Third-party processors">

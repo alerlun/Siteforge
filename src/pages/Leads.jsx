@@ -35,6 +35,8 @@ export default function Leads() {
   const [error, setError] = useState('');
   const [limitHit, setLimitHit] = useState(false);
   const [info, setInfo] = useState('');
+  const [selected, setSelected] = useState(() => new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const isPro = isProUser(profile);
   const limit = planLimit(profile, 'leads');
@@ -112,6 +114,36 @@ export default function Leads() {
     await supabase.from('leads').update({ status }).eq('id', id);
   }
 
+  function toggleSelected(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Leads hold third-party business data (often a sole trader's name and phone), so the
+  // user must be able to remove them (AUDIT-APP.md M11). Chats keep working: lead_id is
+  // set null. A deleted place can be found again by a later search.
+  async function deleteLeads(ids) {
+    if (!ids.length || deleting) return;
+    const label = ids.length === 1 ? 'this lead' : `${ids.length} leads`;
+    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setDeleting(true);
+    setError('');
+    const { error: err } = await supabase.from('leads').delete().in('id', ids);
+    setDeleting(false);
+    if (err) {
+      setError(`Could not delete: ${err.message}`);
+      return;
+    }
+    const gone = new Set(ids);
+    setRows((prev) => prev.filter((r) => !gone.has(r.id)));
+    setSelected((prev) => new Set([...prev].filter((id) => !gone.has(id))));
+    if (gone.has(expandedId)) setExpandedId(null);
+  }
+
   function generateForLead(lead) {
     const parts = [
       `Create a website for this local business: ${lead.business_name ?? ''}`,
@@ -160,6 +192,11 @@ export default function Leads() {
         <div className="font-mono uppercase tracking-widest text-xs text-muted shrink-0">leads</div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span className="badge border-border text-text whitespace-nowrap">Leads used: {used}/{limit}</span>
+          {selected.size > 0 && (
+            <button className="btn text-xs px-2 py-1" disabled={deleting} onClick={() => deleteLeads([...selected])}>
+              {deleting ? 'deleting…' : `Delete ${selected.size}`}
+            </button>
+          )}
           {isPro && (
             <button className="btn text-xs px-2 py-1" onClick={exportCsv} disabled={!rows.length}>Export CSV</button>
           )}
@@ -221,6 +258,14 @@ export default function Leads() {
           <table className="data">
             <thead className="sticky top-0 bg-surface z-10">
               <tr>
+                <th className="w-8">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all leads"
+                    checked={rows.length > 0 && selected.size === rows.length}
+                    onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())}
+                  />
+                </th>
                 <th>Business Name</th>
                 <th>Type</th>
                 <th>Phone</th>
@@ -240,6 +285,14 @@ export default function Leads() {
                     className="cursor-pointer hover:bg-surface/50"
                     onClick={() => setExpandedId(isExpanded ? null : r.id)}
                   >
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${r.business_name}`}
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleSelected(r.id)}
+                      />
+                    </td>
                     <td className="font-mono">
                       <span className="inline-flex items-center gap-1.5">
                         <span className="text-muted text-[10px]">{isExpanded ? '▼' : '▶'}</span>
@@ -276,7 +329,7 @@ export default function Leads() {
                   </tr>,
                   isExpanded && (
                     <tr key={`${r.id}-detail`} className="bg-surface/30">
-                      <td colSpan={8} className="px-6 py-4">
+                      <td colSpan={9} className="px-6 py-4">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
                           <DetailField label="EMAIL">
                             {r.email
@@ -318,6 +371,13 @@ export default function Leads() {
                               onClick={(e) => { e.stopPropagation(); generateForLead(r); }}
                             >
                               Generate Site →
+                            </button>
+                            <button
+                              className="btn text-xs py-1 px-3 ml-2"
+                              disabled={deleting}
+                              onClick={(e) => { e.stopPropagation(); deleteLeads([r.id]); }}
+                            >
+                              Delete
                             </button>
                           </DetailField>
                         </div>
