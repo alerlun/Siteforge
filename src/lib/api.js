@@ -40,14 +40,40 @@ export async function callFunction(name, body = {}) {
   return res.json();
 }
 
+// generate-site sends a heartbeat every 5 s, so this long without any data means the
+// connection is gone (e.g. the phone switched networks); stop instead of spinning.
+const SSE_IDLE_TIMEOUT_MS = 45_000;
+
+function readWithTimeout(reader) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error('Connection lost while generating. The site may still finish: reopen this chat in a minute before trying again.');
+      err.status = 0;
+      err.data = { error: 'stream_timeout' };
+      reject(err);
+    }, SSE_IDLE_TIMEOUT_MS);
+  });
+  return Promise.race([reader.read(), timeout]).finally(() => clearTimeout(timer));
+}
+
 async function readSSE(res) {
   const reader = res.body.getReader();
+  try {
+    return await readEvents(reader);
+  } catch (err) {
+    reader.cancel().catch(() => {});
+    throw err;
+  }
+}
+
+async function readEvents(reader) {
   const decoder = new TextDecoder();
   let buf = '';
   let totalBytes = 0;
 
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithTimeout(reader);
     if (done) {
       if (import.meta.env.DEV) console.warn('[readSSE] stream done. totalBytes:', totalBytes, 'buf tail:', JSON.stringify(buf.slice(-200)));
       break;
