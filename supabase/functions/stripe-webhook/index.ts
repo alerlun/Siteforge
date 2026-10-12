@@ -94,11 +94,20 @@ Deno.serve(async (req) => {
   // supabase-js returns { error } instead of throwing. Any DB error must surface as a
   // non-2xx response so Stripe retries the event; the RPCs are idempotent per event id.
   try {
-    if (event.type === 'checkout.session.completed') {
+    if (
+      event.type === 'checkout.session.completed' ||
+      event.type === 'checkout.session.async_payment_succeeded'
+    ) {
       // Upgrade: plan = 'pro' + top up to the Pro allowance (stripe_apply_checkout).
+      // With delayed payment methods (SEPA, Klarna, ...) 'completed' arrives with
+      // payment_status 'unpaid'; the upgrade then waits for 'async_payment_succeeded'.
+      // A failed delayed payment ('async_payment_failed') never upgrades, so it needs no handling.
       const session = event.data.object;
       const userId = session.client_reference_id ?? session.metadata?.supabase_user_id;
-      if (userId) {
+      const paid = session.payment_status === 'paid' || session.payment_status === 'no_payment_required';
+      if (!paid) {
+        console.log('[stripe-webhook] checkout not paid yet, waiting:', event.id, session.payment_status);
+      } else if (userId) {
         const { error } = await supabase.rpc('stripe_apply_checkout', {
           p_event_id: event.id,
           p_user_id: userId,

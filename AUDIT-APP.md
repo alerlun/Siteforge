@@ -100,6 +100,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `checkout.session.completed` behandlas som betald. Med asynkrona betalmetoder (SEPA, Klarna, Bancontact m.fl.) kan `payment_status` vara `unpaid` när händelsen kommer. Användaren får då Pro och 680 000 credits innan pengarna kommit in, och behåller saldot även om betalningen misslyckas. Hur stor risken är beror på vilka betalmetoder som är påslagna i Stripe; bara kort ger `paid` direkt. Återbetalningar och tvister (`charge.refunded`, `charge.dispute.created`) hanteras inte heller.
 - **Förslag:** Tillämpa bara om `session.payment_status` är `paid` eller `no_payment_required`. Hantera `checkout.session.async_payment_succeeded`. Alternativt: begränsa Checkout till kort (`payment_method_types[]=card`).
 
+> **Åtgärdat 2026-10-12** (`stripe-webhook`, **väntar på deploy**; inte testat mot Stripe): `checkout.session.completed` uppgraderar bara när `payment_status` är `paid` eller `no_payment_required`. Annars väntar uppgraderingen på `checkout.session.async_payment_succeeded`, som hanteras på samma sätt. En misslyckad fördröjd betalning uppgraderar aldrig. **Kräver** att webhook-endpointen i Stripe också prenumererar på `checkout.session.async_payment_succeeded` (test och live). **Inte gjort:** återbetalningar och tvister (`charge.refunded`, `charge.dispute.created`) hanteras fortfarande manuellt.
+
 ### M3. Obegränsat antal gratiskonton *(kontrollerat i kod)*
 - **Område:** Pengar
 - **Fil:** `supabase/schema.sql` / `handle_new_user()` (68 000 credits vid signup), `src/pages/Signup.jsx`
