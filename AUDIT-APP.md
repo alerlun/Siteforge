@@ -17,7 +17,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | H2 | ✅ Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
 | H3 | ✅ Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
 | H4 | ✅ Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
-| H5 | Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
+| H5 | ✅ Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
 | H6 | Hög | Dataskydd | Det går inte att radera sitt konto, trots att integritetspolicyn säger det |
 | M1 | Medel | Säkerhet | "Fullscreen" kör genererad HTML i appens origin (åtkomst till inloggningstoken) |
 | M2 | Medel | Pengar | Webhooken ger Pro utan att kontrollera `payment_status` *(trolig)* |
@@ -68,7 +68,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Reservationen bygger på ett fast estimat: 3 000 input-tokens med historik, och 500 för element-ändring. `settle_credits` drar sedan den verkliga kostnaden **utan golv**. En klient som skickar 600 kB `history` ger ~150 000 input-tokens (~165 000 credits för ett enda anrop) men reserverar bara ~63 000. Saldot blir kraftigt negativt. `reset_monthly_counters` sätter saldot till tilldelningen (`saldo := 68 000`), så **skulden försvinner den 1:a**. Samma sak gäller `edit-element`: element på upp till 50 000 tecken, estimat 17 050. Detta är fynd 22 i `ARKITEKTUR.md` 8.4, men större än beskrivet där.
 - **Förslag:** Beräkna estimatet på faktisk indata: tecken i `history` + `prompt` + `elementHtml` delat med ~2,5, plus `max_tokens` × output-sats som övre gräns. Reservera alltså värsta fallet och justera ned vid settle. Begränsa `history` hårdare; servern bör läsa historiken från `chat_messages` i stället för att lita på klienten. Överväg att låta månadsreseten dra av negativt saldo (`saldo := tilldelning + min(saldo, 0)`).
 
-### H5. Lösenordsåterställning saknar steget "välj nytt lösenord" *(kontrollerat)*
+### H5. ✅ Lösenordsåterställning saknar steget "välj nytt lösenord" *(kontrollerat)*
+> **Åtgärdat 2026-10-12** (frontend, går ut med nästa Vercel-deploy; **kräver** att `<origin>/reset-password` läggs till under Auth → URL configuration → Redirect URLs i Supabase): ny sida `/reset-password` (`src/pages/ResetPassword.jsx`) som tar emot återställningssessionen och sparar nytt lösenord med `updateUser`; visar "länken är ogiltig" utan session. "Forgot password?" på Login skickar mejlet (kräver ifylld e-post). Settings pekar om länken dit. `supabase/README.md` uppdaterad. Testat i webbläsaren: sidan utan session och knappen utan e-post. Hela flödet med riktigt mejl är inte testat.
 - **Område:** Bugg (trasigt flöde)
 - **Fil:** `src/pages/Settings.jsx:112-123` (`resetPasswordForEmail` med `redirectTo: /login`), `src/pages/Login.jsx` (ingen hantering). `updateUser` och `PASSWORD_RECOVERY` förekommer ingenstans i `src/`.
 - **Problem:** Länken i e-postmeddelandet loggar in användaren med en återställningssession och skickar hen till `/login`. Där visas bara inloggningsformuläret, och nytt lösenord kan aldrig sättas. Login-sidan saknar dessutom "Glömt lösenord?", så den som glömt sitt lösenord kan inte ta sig in alls utom via Google.

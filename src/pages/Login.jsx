@@ -7,6 +7,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [info, setInfo] = useState('');
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -22,6 +23,22 @@ export default function Login() {
     }
     const next = location.state?.from || '/app/chat';
     navigate(next, { replace: true });
+  }
+
+  async function onForgot() {
+    setErr('');
+    setInfo('');
+    if (!email) {
+      setErr('Enter your email above first.');
+      return;
+    }
+    setBusy(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setBusy(false);
+    if (error) setErr(error.message);
+    else setInfo('If an account exists for that email, a reset link is on its way.');
   }
 
   async function onGoogle() {
@@ -45,7 +62,11 @@ export default function Login() {
           <input className="input" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
         {err && <div className="font-mono text-xs text-accent">{err}</div>}
+        {info && <div className="font-mono text-xs text-muted">{info}</div>}
         <button className="btn-primary w-full" disabled={busy}>{busy ? 'signing in…' : 'Sign In'}</button>
+        <button type="button" className="font-mono text-xs text-muted hover:text-accent" onClick={onForgot} disabled={busy}>
+          Forgot password?
+        </button>
       </form>
       <div className="my-6 flex items-center gap-3">
         <div className="flex-1 h-px bg-border" />
