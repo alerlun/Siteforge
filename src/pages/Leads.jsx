@@ -19,6 +19,8 @@ function DetailField({ label, children }) {
 const RADIUS_OPTIONS = ['1mi', '5mi', '10mi', '25mi'];
 const RESULT_OPTIONS = [20, 50, 100];
 const STATUS_OPTIONS = ['new', 'contacted', 'sold', 'not_interested'];
+// Leads are loaded in pages instead of all at once (AUDIT-APP.md L20).
+const PAGE_SIZE = 100;
 
 export default function Leads() {
   const { profile, refreshProfile } = useAuth();
@@ -35,6 +37,8 @@ export default function Leads() {
   const [error, setError] = useState('');
   const [limitHit, setLimitHit] = useState(false);
   const [info, setInfo] = useState('');
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [deleting, setDeleting] = useState(false);
 
@@ -49,9 +53,13 @@ export default function Leads() {
       const { data, error: err } = await supabase
         .from('leads')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .range(0, PAGE_SIZE - 1);
       if (!active) return;
-      if (!err) setRows(data ?? []);
+      if (!err) {
+        setRows(data ?? []);
+        setHasMore((data ?? []).length === PAGE_SIZE);
+      }
       setLoading(false);
     })();
     return () => { active = false; };
@@ -179,10 +187,44 @@ export default function Leads() {
     return `'${v}`;
   }
 
-  function exportCsv() {
+  // Rows are offset-paged newest first; new search results and deletions shift the
+  // database and the list by the same amount, so rows.length stays the right offset.
+  async function loadMore() {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    const { data, error: err } = await supabase
+      .from('leads')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(rows.length, rows.length + PAGE_SIZE - 1);
+    setLoadingMore(false);
+    if (err) {
+      setError(`Could not load more leads: ${err.message}`);
+      return;
+    }
+    const known = new Set(rows.map((r) => r.id));
+    const next = (data ?? []).filter((r) => !known.has(r.id));
+    setRows((prev) => [...prev, ...next]);
+    setHasMore((data ?? []).length === PAGE_SIZE);
+  }
+
+  async function exportCsv() {
     if (!isPro) return;
+    // The export covers all leads, not just the pages loaded so far.
+    let all = rows;
+    if (hasMore) {
+      const { data, error: err } = await supabase
+        .from('leads')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (err) {
+        setError(`Could not export: ${err.message}`);
+        return;
+      }
+      all = data ?? [];
+    }
     const csv = Papa.unparse(
-      rows.map((r) => ({
+      all.map((r) => ({
         business_name: csvSafe(r.business_name),
         phone: csvSafe(r.phone),
         address: csvSafe(r.address),
@@ -404,6 +446,13 @@ export default function Leads() {
               })}
             </tbody>
           </table>
+          {hasMore && (
+            <div className="p-4 flex justify-center">
+              <button className="btn text-xs" disabled={loadingMore} onClick={loadMore}>
+                {loadingMore ? 'loading…' : 'Load more'}
+              </button>
+            </div>
+          )}
           </div>
         )}
       </div>
