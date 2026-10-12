@@ -695,13 +695,29 @@ Deno.serve(async (req) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[generate-site] IIFE error:', msg);
-        // The AI call or saving failed: give the reserved estimate back.
+        // deno-lint-ignore no-explicit-any
+        const e = err as any;
+        // A chat edit the model produced but that could not be applied (edit_failed) has
+        // used real tokens: charge what it cost, at most the reserved estimate
+        // (AUDIT-APP.md L1). Any other failure gives the reserved estimate back.
+        if (!settled && e?.message === 'edit_failed' && totalUsage.output_tokens > 0) {
+          const used = Math.min(computeCredits(totalUsage, rates), estimate);
+          const { error: chargeErr } = await supabase.rpc('settle_credits', {
+            p_ledger_id: reservationId,
+            p_credits: used,
+            p_input_tokens: totalUsage.input_tokens,
+            p_output_tokens: totalUsage.output_tokens,
+            p_cache_write_tokens: totalUsage.cache_creation_input_tokens ?? 0,
+            p_cache_read_tokens: totalUsage.cache_read_input_tokens ?? 0,
+            p_site_id: null,
+          });
+          if (chargeErr) console.error('[generate-site] settle_credits (edit_failed) failed:', reservationId, chargeErr.message);
+          else settled = true;
+        }
         if (!settled) {
           const { error: refundErr } = await supabase.rpc('refund_credits', { p_ledger_id: reservationId });
           if (refundErr) console.error('[generate-site] refund_credits failed:', reservationId, refundErr.message);
         }
-        // deno-lint-ignore no-explicit-any
-        const e = err as any;
         // edit_failed carries a user-facing detail; anything else (Anthropic's response
         // body, DB errors) stays in the log (AUDIT-APP.md L9).
         if (e?.detail) {

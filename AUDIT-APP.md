@@ -191,7 +191,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 
 | # | Område | Fil:rad | Problem | Förslag |
 |---|---|---|---|---|
-| L1 | Pengar | `generate-site/index.ts:678-682` | En misslyckad chatt-ändring återbetalar hela estimatet fast tokens förbrukats (ARKITEKTUR 21). | Ta betalt för förbrukade tokens, eller en fast avgift vid `edit_failed`. |
+| L1 | Pengar | `generate-site/index.ts:678-682` | En misslyckad chatt-ändring återbetalar hela estimatet fast tokens förbrukats (ARKITEKTUR 21). | Ta betalt för förbrukade tokens, eller en fast avgift vid `edit_failed`. **Åtgärdat 2026-10-12** (väntar på deploy; beslut: faktisk tokenkostnad): vid `edit_failed` debiteras verklig kostnad, högst estimatet, via `settle_credits`; övriga fel återbetalas helt. |
 | L2 | Pengar | `generate-site/index.ts:535-541` | Klassificeringen (Haiku) körs före reservationen, alltså gratis även med 0 saldo (ARKITEKTUR 23). | Kontrollera `credit_balance > 0` före klassificeringen. **Åtgärdat 2026-10-12** (väntar på deploy): 402 före klassificeringen om saldot är lägre än det billigaste estimatet (bygge eller ändring). Reservationen är fortfarande det atomära skyddet. |
 | L3 | Pengar | migration `20261011210000`, `settle_credits` | En månadsreset under en pågående reservation ger fel saldo (ARKITEKTUR 25). | Låt reseten räkna med öppna reservationer, eller låt `settle` justera mot reservationens tidpunkt. |
 | L4 | Bugg | `credit_ledger` | Ingen städning av `reserved`-rader som blir hängande (ARKITEKTUR 27). 0 rader live idag. | Cron som återbetalar `reserved` äldre än 15 min. |
