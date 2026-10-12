@@ -129,6 +129,8 @@ export default function Editor() {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
   const [savedMsg, setSavedMsg] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [unsavedHtml, setUnsavedHtml] = useState(null);
 
   const [device, setDevice] = useState('desktop');
   const [showHistory, setShowHistory] = useState(false);
@@ -233,14 +235,32 @@ export default function Editor() {
     setShowHistory(false);
   }
 
+  // Persist the edited HTML. On failure the HTML is kept in `unsavedHtml` so the user can
+  // retry, and leaving the page warns (the edit was already paid for in credits).
   async function saveToDb(newHtml) {
-    await supabase
+    setSaveError('');
+    const { data, error } = await supabase
       .from('generated_sites')
       .update({ html_output: newHtml })
-      .eq('id', siteId);
+      .eq('id', siteId)
+      .select('id');
+    // RLS filters rows instead of erroring, so zero updated rows is also a failure.
+    if (error || !data?.length) {
+      setUnsavedHtml(newHtml);
+      setSaveError(error?.message || 'Could not save the change.');
+      return;
+    }
+    setUnsavedHtml(null);
     setSavedMsg('Saved');
     setTimeout(() => setSavedMsg(''), 2000);
   }
+
+  useEffect(() => {
+    if (unsavedHtml === null) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [unsavedHtml]);
 
   async function applyEdit(e) {
     e.preventDefault();
@@ -381,6 +401,14 @@ export default function Editor() {
 
         {savedMsg && (
           <span className="font-mono text-xs text-accent">{savedMsg}</span>
+        )}
+        {unsavedHtml !== null && (
+          <span className="font-mono text-xs text-accent flex items-center gap-2" title={saveError}>
+            Not saved
+            <button className="btn text-xs px-2 py-1" onClick={() => saveToDb(unsavedHtml)}>
+              Retry
+            </button>
+          </span>
         )}
 
         <span

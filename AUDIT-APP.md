@@ -120,6 +120,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `saveToDb` ignorerar `error` från `update` och visar alltid "Saved". Vid nätverksfel eller utgången session har användaren betalat för element-ändringen men förlorar den när sidan stängs.
 - **Förslag:** Kontrollera `error`, visa fel och en "Försök igen"-knapp, och varna vid `beforeunload` om osparade ändringar finns.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): `saveToDb` kontrollerar fel och att en rad faktiskt uppdaterades (RLS ger 0 rader i stället för fel). Vid fel visas "Not saved" med en "Retry"-knapp (felmeddelandet som tooltip), och sidan varnar vid stängning så länge ändringen inte är sparad. Kontrollerat i DB: `authenticated` har UPDATE på `generated_sites.html_output` och RLS-policyn `auth.uid() = user_id` gäller.
+
 ### M6. Ångra/gör om/återställ version i Editor sparas aldrig *(kontrollerat)*
 - **Område:** Bugg
 - **Fil:** `src/pages/Editor.jsx:213-231`
