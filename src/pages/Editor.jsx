@@ -134,6 +134,26 @@ export default function Editor() {
 
   const [device, setDevice] = useState('desktop');
   const [showHistory, setShowHistory] = useState(false);
+  // The navbar scrolls horizontally (overflow-x-auto), which would clip an absolutely
+  // positioned dropdown, so the history menu is fixed to the viewport under its button.
+  const [historyPos, setHistoryPos] = useState(null);
+  const historyBtnRef = useRef(null);
+  const historyMenuRef = useRef(null);
+
+  useEffect(() => {
+    if (!showHistory) return undefined;
+    const close = (e) => {
+      if (historyMenuRef.current?.contains(e.target) || historyBtnRef.current?.contains(e.target)) return;
+      setShowHistory(false);
+    };
+    const closeNow = () => setShowHistory(false);
+    document.addEventListener('mousedown', close);
+    window.addEventListener('resize', closeNow);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      window.removeEventListener('resize', closeNow);
+    };
+  }, [showHistory]);
 
   const creditBalance = profile?.credit_balance ?? 0;
   const canEdit = creditBalance >= estimateCredits(
@@ -385,12 +405,21 @@ export default function Editor() {
         <div className="relative">
           <button
             className={`btn text-xs ${showHistory ? 'border-accent text-accent' : ''}`}
-            onClick={() => setShowHistory((v) => !v)}
+            ref={historyBtnRef}
+            onClick={() => {
+              const r = historyBtnRef.current?.getBoundingClientRect();
+              if (r) setHistoryPos({ left: r.left, top: r.bottom + 4 });
+              setShowHistory((v) => !v);
+            }}
           >
             History ({history.length})
           </button>
-          {showHistory && (
-            <div className="absolute left-0 top-full mt-1 z-50 w-56 card shadow-lg">
+          {showHistory && historyPos && (
+            <div
+              ref={historyMenuRef}
+              className="fixed z-50 w-56 card shadow-lg max-h-[60vh] overflow-y-auto"
+              style={{ left: historyPos.left, top: historyPos.top }}
+            >
               {history.map((_, i) => (
                 <button
                   key={i}
@@ -466,6 +495,9 @@ export default function Editor() {
             style={{ width: deviceCfg.width, maxWidth: '100%' }}
           >
             <iframe
+              // A new element per version: changing src on the same iframe adds browser
+              // history entries, and Back then lands on an already revoked blob: URL.
+              key={previewUrl}
               ref={iframeRef}
               title="editor-preview"
               src={previewUrl}

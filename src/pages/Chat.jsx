@@ -480,6 +480,9 @@ export default function Chat() {
             <div className="flex-1 min-h-0 bg-black">
               {previewUrl ? (
                 <iframe
+                  // New element per version so src changes don't add browser history
+                  // entries that point at revoked blob: URLs.
+                  key={previewUrl}
                   title="preview"
                   src={previewUrl}
                   className="w-full h-full bg-white"
