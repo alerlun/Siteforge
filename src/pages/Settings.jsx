@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth, isProUser } from '../lib/auth.jsx';
 import { supabase } from '../lib/supabase.js';
 import { callFunction } from '../lib/api.js';
@@ -26,6 +26,7 @@ export default function Settings() {
     }
   }, [upgraded, refreshProfile, setParams]);
 
+  const navigate = useNavigate();
   const isPro = isProUser(profile);
   // Only a Stripe subscription has a billing portal. Pro from referrals (pro_until) has
   // none, so it gets the upgrade button instead of a portal call that always fails.
@@ -139,17 +140,10 @@ export default function Settings() {
     }
   }
 
-  async function changePassword() {
-    if (!user?.email) return;
-    setBusy(true);
-    setErr('');
-    setInfo('');
-    const { error } = await supabase.auth.resetPasswordForEmail(user.email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    setBusy(false);
-    if (error) setErr(error.message);
-    else setInfo('Password reset email sent.');
+  // The user is signed in, so the new password is set directly on /reset-password
+  // (updateUser). Sending a reset email would need a captcha token once captcha is on.
+  function changePassword() {
+    navigate('/reset-password');
   }
 
   return (

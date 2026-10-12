@@ -108,6 +108,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Varje nytt konto får 68 000 credits (ungefär en sajt), och det finns ingen captcha eller enhets- eller IP-spärr. Med Google OAuth eller engångsadresser kan man skapa många konton. Värvningsbonusen (5 konton som var och en genererar en sajt ger en månad Pro = 680 000 credits) kan farmas på samma sätt, eftersom IP-skyddet är svagt (M4).
 - **Förslag:** Slå på Supabase Auth captcha (hCaptcha/Turnstile) och e-postbekräftelse. Överväg att ge gratiskrediterna först efter bekräftad e-post, eller en lägre startsumma. Kräv för värvningsbonus att det värvade kontot är verifierat och har fler än en åtgärd.
 
+> **Åtgärdat i kod 2026-10-12** (frontend, väntar på Vercel-deploy; widgeten testad lokalt med Cloudflares testnyckel): ny `Captcha.jsx` (Cloudflare Turnstile) på Signup och Login; token skickas vid registrering, inloggning med lösenord och "Forgot password?". Knapparna är låsta tills captcha är klar. Utan `VITE_TURNSTILE_SITE_KEY` visas ingen widget och allt fungerar som förut. "Change Password" i Settings går nu direkt till `/reset-password` (inloggad användare, `updateUser`, ingen captcha behövs). CSP tillåter `challenges.cloudflare.com`. **Kräver** (i den här ordningen, se `supabase/README.md` 3b): Turnstile-widget i Cloudflare → site key i Vercel → deploy → captcha + "Confirm email" på i Supabase. **Inte gjort:** Google OAuth täcks inte av captcha; credits ges fortfarande vid signup (inte först efter bekräftad e-post); värvningskrav oförändrade.
+
 ### M4. IP läses från `X-Forwarded-For` *(kontrollerat)*
 - **Område:** Säkerhet (rate limiting, missbruk)
 - **Fil:** `supabase/functions/_shared/guards.ts:49-53`

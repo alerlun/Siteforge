@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase.js';
+import Captcha, { CAPTCHA_SITE_KEY } from '../components/Captcha.jsx';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -8,15 +9,23 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [info, setInfo] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaRef = useRef(null);
   const navigate = useNavigate();
+  const needsCaptcha = Boolean(CAPTCHA_SITE_KEY) && !captchaToken;
   const location = useLocation();
 
   async function onEmailSubmit(e) {
     e.preventDefault();
     setBusy(true);
     setErr('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+      options: { captchaToken: captchaToken || undefined },
+    });
     setBusy(false);
+    captchaRef.current?.reset();
     if (error) {
       setErr(error.message);
       return;
@@ -32,11 +41,17 @@ export default function Login() {
       setErr('Enter your email above first.');
       return;
     }
+    if (needsCaptcha) {
+      setErr('Complete the captcha first.');
+      return;
+    }
     setBusy(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
+      captchaToken: captchaToken || undefined,
     });
     setBusy(false);
+    captchaRef.current?.reset();
     if (error) setErr(error.message);
     else setInfo('If an account exists for that email, a reset link is on its way.');
   }
@@ -61,9 +76,10 @@ export default function Login() {
           <div className="label mb-1">Password</div>
           <input className="input" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
+        <Captcha ref={captchaRef} onToken={setCaptchaToken} />
         {err && <div className="font-mono text-xs text-accent">{err}</div>}
         {info && <div className="font-mono text-xs text-muted">{info}</div>}
-        <button className="btn-primary w-full" disabled={busy}>{busy ? 'signing in…' : 'Sign In'}</button>
+        <button className="btn-primary w-full" disabled={busy || needsCaptcha}>{busy ? 'signing in…' : 'Sign In'}</button>
         <button type="button" className="font-mono text-xs text-muted hover:text-accent" onClick={onForgot} disabled={busy}>
           Forgot password?
         </button>

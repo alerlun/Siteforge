@@ -46,6 +46,16 @@ If a knob isn't exposed at that exact value, pick the closest stricter one — n
 - **Additional redirect URLs**: must include `<origin>/reset-password` (password-reset emails land there) and `<origin>/app/chat` for every origin. List every preview / staging origin explicitly. Do **not** wildcard the whole domain (`https://*.vercel.app` accepts subdomain takeovers).
 - **JWT expiry**: 3600s (1h) is the default — keep, do not extend.
 
+## 3b. Auth → Sign up / Attack Protection (AUDIT-APP.md M3)
+
+Every new account gets free credits, so sign-ups must be costly to automate.
+
+- **Confirm email**: on (Authentication → Sign In / Providers → Email → *Confirm email*).
+- **Captcha**: Cloudflare Turnstile (Authentication → Attack Protection → *Enable Captcha protection*, provider Turnstile, paste the **secret** key). Create the widget in the Cloudflare dashboard (Turnstile → Add widget) with the production and preview hostnames.
+- Set the **site** key as `VITE_TURNSTILE_SITE_KEY` in Vercel (Production + Preview), redeploy, and only then switch captcha on in Supabase. Order matters: with captcha on and no site key in the frontend, email sign-in, sign-up and password reset all fail.
+- The frontend sends the token on sign-up, password sign-in and the password-reset email. Signed-in users change their password on `/reset-password` (`updateUser`), which needs no captcha. Google OAuth is not covered by the captcha.
+- `vercel.json` allows `https://challenges.cloudflare.com` in `script-src` and `frame-src`.
+
 ## 4. Database
 
 - **RLS** must be enabled on every table that holds user data (`profiles`, `leads`, `chat_sessions`, `generated_sites`, `chat_messages`). Confirm before going live; the schema is `schema.sql` (frozen baseline, 2026-10-07) plus the files in `supabase/migrations/`, applied in order.
