@@ -215,23 +215,44 @@ export default function Editor() {
     setHtml(newHtml);
   }, [historyIdx]);
 
+  // Undo/redo/restore move within the history and persist the shown version, so the
+  // database (and Chat) match what the editor displays. Saves are debounced so a run of
+  // undo clicks writes once; a pending save is flushed when the editor unmounts.
+  const pendingSaveRef = useRef(null); // { timer, html }
+  const saveRef = useRef(null);
+
+  function goToVersion(idx) {
+    const target = history[idx];
+    setHistoryIdx(idx);
+    setHtml(target);
+    if (pendingSaveRef.current) clearTimeout(pendingSaveRef.current.timer);
+    const timer = setTimeout(() => {
+      pendingSaveRef.current = null;
+      saveRef.current(target);
+    }, 600);
+    pendingSaveRef.current = { timer, html: target };
+  }
+
+  useEffect(() => () => {
+    const pending = pendingSaveRef.current;
+    if (pending) {
+      clearTimeout(pending.timer);
+      saveRef.current(pending.html);
+    }
+  }, []);
+
   function undo() {
     if (historyIdx <= 0) return;
-    const idx = historyIdx - 1;
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(historyIdx - 1);
   }
 
   function redo() {
     if (historyIdx >= history.length - 1) return;
-    const idx = historyIdx + 1;
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(historyIdx + 1);
   }
 
   function restoreVersion(idx) {
-    setHistoryIdx(idx);
-    setHtml(history[idx]);
+    goToVersion(idx);
     setShowHistory(false);
   }
 
@@ -255,9 +276,14 @@ export default function Editor() {
     setTimeout(() => setSavedMsg(''), 2000);
   }
 
+  saveRef.current = saveToDb;
+
   useEffect(() => {
-    if (unsavedHtml === null) return undefined;
-    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    const warn = (e) => {
+      if (unsavedHtml === null && !pendingSaveRef.current) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [unsavedHtml]);
@@ -288,6 +314,11 @@ export default function Editor() {
           target.outerHTML = updatedHtml;
           newHtml = '<!DOCTYPE html>' + doc.documentElement.outerHTML;
         }
+      }
+      // A pending undo/redo save must not overwrite this edit.
+      if (pendingSaveRef.current) {
+        clearTimeout(pendingSaveRef.current.timer);
+        pendingSaveRef.current = null;
       }
       pushHistory(newHtml);
       await saveToDb(newHtml);

@@ -128,6 +128,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** `undo`, `redo` och `restoreVersion` ändrar bara det lokala tillståndet. Databasen har kvar den senaste AI-ändringen. Den som ångrar, lämnar Editor och öppnar Chat eller Editor igen ser den ångrade versionen. Historiken försvinner vid omladdning.
 - **Förslag:** Spara efter undo/redo/restore (eventuellt med debounce), eller visa en tydlig "Spara"-knapp med osparad-markering.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): ångra, gör om och återställ version sparar nu den version som visas, med 600 ms fördröjning så att flera klick i rad blir en skrivning. En väntande sparning skickas direkt när man lämnar Editor inom appen, webbläsaren varnar vid stängning medan den väntar, och en ny AI-ändring avbryter den så att den inte skrivs över. Fel visas med "Not saved"/"Retry" (M5). **Inte gjort:** historiken sparas inte mellan omladdningar; det kräver lagring i DB.
+
 ### M7. Pro via värvning visar "Manage Billing", som alltid ger fel *(kontrollerat)*
 - **Område:** Bugg / Pengar (förlorad försäljning)
 - **Fil:** `src/pages/Settings.jsx:141-146`, `supabase/functions/create-portal/index.ts:33`
