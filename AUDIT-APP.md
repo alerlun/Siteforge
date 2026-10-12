@@ -13,7 +13,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 
 | # | Allvar | Område | Fynd |
 |---|---|---|---|
-| H1 | Hög | Pengar | Leads-sökning kan köra obegränsat många Google Places-anrop |
+| H1 | ✅ Hög | Pengar | Leads-sökning kan köra obegränsat många Google Places-anrop |
 | H2 | Hög | Pengar/Bugg | `leads_used` uppdateras inte atomiskt – parallella sökningar kringgår gränsen |
 | H3 | Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
 | H4 | Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
@@ -37,7 +37,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 
 ## Hög
 
-### H1. Leads-sökning kan köra obegränsat många Google Places-anrop *(kontrollerat)*
+### H1. ✅ Leads-sökning kan köra obegränsat många Google Places-anrop *(kontrollerat)*
+> **Åtgärdat 2026-10-12** (kod klar, **väntar på deploy** av `scrape-leads`): varje 5 undersökta företag drar minst 1 lead av kvoten (`EXAMINED_PER_LEAD = 5`; kvot = max(sparade, ceil(undersökta/5))). Antalet Details-anrop per konto och månad blir då högst 5 × leadsgränsen (Free 50, Pro 500). Leads-sidan visar när kvoten dragits för skannade företag. Rekommenderat utöver koden: dagsgräns för Place Details och budgetlarm i Google Cloud.
 - **Område:** Pengar / Säkerhet (kostnadsmissbruk)
 - **Fil:** `supabase/functions/scrape-leads/index.ts:84-86`, `:138-155`, `:181-184`
 - **Problem:** Kvoten (`leads_used`) räknar bara **sparade** leads. Med standardfiltret "Without website only" hoppas företag med hemsida över. De kostar ändå ett Place Details-anrop var, men räknas inte. En gratisanvändare med 10 leads kvar får `examineCap = 50`. Söker hen på en kategori där alla har hemsida, t.ex. "hotell i Stockholm", blir det 50 Details-anrop och 0 leads. Det kan upprepas 20 gånger/minut (rate limit) utan att kvoten minskar, alltså upp till ~1 000 Details-anrop/minut per konto. Place Details med Contact- och Atmosphere-fält kostar ungefär 0,02–0,03 USD/st. Det kan bli flera hundra dollar per timme från ett enda gratiskonto.

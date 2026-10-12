@@ -5,6 +5,11 @@ import { readBoundedJson, errorResponse, fromHttpError, clientIp } from '../_sha
 import { scrapeLeadsSchema } from '../_shared/validation.ts';
 import { enforce } from '../_shared/ratelimit.ts';
 
+// Every Place Details call costs money, also for businesses the website filter drops.
+// A search therefore uses at least one lead of the monthly quota per EXAMINED_PER_LEAD
+// places examined, so the quota also caps the Places spend per account.
+const EXAMINED_PER_LEAD = 5;
+
 const RADIUS_METERS: Record<string, number> = {
   '1mi': 1609,
   '5mi': 8047,
@@ -83,7 +88,8 @@ Deno.serve(async (req) => {
     }
     const fetchTarget = Math.min(cap, remaining);
     // Hard ceiling on places examined per search to bound Places API spend.
-    const examineCap = Math.min(fetchTarget * 5, 200);
+    // Never examine more places than the remaining quota can pay for (see EXAMINED_PER_LEAD).
+    const examineCap = Math.min(fetchTarget * EXAMINED_PER_LEAD, 200);
 
     // Text Search w/ pagination (each page = up to 20 results), bounded by examineCap.
     const collected: PlaceResult[] = [];
@@ -178,9 +184,10 @@ Deno.serve(async (req) => {
       inserted = data ?? [];
     }
 
+    const quotaUsed = Math.max(inserted.length, Math.ceil(examined / EXAMINED_PER_LEAD));
     await supabase
       .from('profiles')
-      .update({ leads_used: (profile.leads_used ?? 0) + inserted.length })
+      .update({ leads_used: (profile.leads_used ?? 0) + quotaUsed })
       .eq('id', user.id);
 
     return new Response(
@@ -189,6 +196,7 @@ Deno.serve(async (req) => {
         count: inserted.length,
         examined,
         skippedHasWebsite,
+        quotaUsed,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
