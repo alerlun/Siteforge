@@ -23,6 +23,7 @@ export const limiters = {
   checkout: { limit: 10, windowSeconds: 60, prefix: 'checkout' },
   portal: { limit: 10, windowSeconds: 60, prefix: 'portal' },
   webhook: { limit: 120, windowSeconds: 60, prefix: 'webhook' },
+  account: { limit: 5, windowSeconds: 60, prefix: 'account' },
 } as const satisfies Record<string, LimitConfig>;
 
 export type LimiterName = keyof typeof limiters;

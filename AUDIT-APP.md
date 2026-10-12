@@ -18,7 +18,7 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 | H3 | ✅ Hög | Pengar | Ingen spärr mot dubbla checkouts → två prenumerationer, en kan inte sägas upp i appen |
 | H4 | ✅ Hög | Pengar | Klienten styr indatastorleken – verklig kostnad kan bli flera gånger estimatet, skulden nollas den 1:a |
 | H5 | ✅ Hög | Bugg | Lösenordsåterställning saknar steget "välj nytt lösenord" |
-| H6 | Hög | Dataskydd | Det går inte att radera sitt konto, trots att integritetspolicyn säger det |
+| H6 | ✅ Hög | Dataskydd | Det går inte att radera sitt konto, trots att integritetspolicyn säger det |
 | M1 | Medel | Säkerhet | "Fullscreen" kör genererad HTML i appens origin (åtkomst till inloggningstoken) |
 | M2 | Medel | Pengar | Webhooken ger Pro utan att kontrollera `payment_status` *(trolig)* |
 | M3 | Medel | Pengar | Obegränsat antal gratiskonton à 68 000 credits |
@@ -75,7 +75,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** Länken i e-postmeddelandet loggar in användaren med en återställningssession och skickar hen till `/login`. Där visas bara inloggningsformuläret, och nytt lösenord kan aldrig sättas. Login-sidan saknar dessutom "Glömt lösenord?", så den som glömt sitt lösenord kan inte ta sig in alls utom via Google.
 - **Förslag:** Lägg till en sida `/reset-password` som lyssnar på `onAuthStateChange` med `PASSWORD_RECOVERY` och anropar `supabase.auth.updateUser({ password })`. Peka `redirectTo` dit, lägg till "Forgot password?" på Login, och lägg till URL:en bland tillåtna redirects i Supabase (se `supabase/README.md`).
 
-### H6. Det går inte att radera sitt konto *(kontrollerat)*
+### H6. ✅ Det går inte att radera sitt konto *(kontrollerat)*
+> **Åtgärdat 2026-10-12** (kod klar, **väntar på deploy** av den nya funktionen `delete-account` + Vercel-deploy; inte testat end-to-end): ny Edge Function `delete-account` (`verify_jwt = true`, rate limit 5/min, kräver `{ confirm: 'DELETE' }`) som (1) säger upp eventuell Stripe-prenumeration direkt och avbryter om det misslyckas, (2) nollar `referred_by` hos användare som kontot värvat (den FK:n saknar ON DELETE), (3) raderar auth-användaren; allt annat raderas i kaskad (verifierat mot live-FK:er). Settings har "Delete account…" med inskrivet DELETE som bekräftelse. Policytexten stämmer nu. Ej gjort här: radera enskilda leads i UI:t.
 - **Område:** Dataskydd (GDPR art. 17)
 - **Fil:** `src/pages/Privacy.jsx:51-53` lovar att "deleting your account removes associated data". Det finns ingen sådan funktion i `src/` eller `supabase/functions/`.
 - **Problem:** Användaren kan radera chattar och ändra lead-status, men inte kontot, `profiles`, `generated_sites`, `credit_ledger` eller `referral_activations`. Policyn beskriver en funktion som inte finns. Leads kan inte raderas i UI:t alls.

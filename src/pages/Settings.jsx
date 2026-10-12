@@ -40,6 +40,9 @@ export default function Settings() {
   const [referralLoading, setReferralLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteText, setDeleteText] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -112,6 +115,21 @@ export default function Settings() {
       // silently ignore — user can retry
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function deleteAccount() {
+    setDeleting(true);
+    setErr('');
+    try {
+      await callFunction('delete-account', { confirm: 'DELETE' });
+      await signOut();
+      window.location.replace('/');
+    } catch (e) {
+      setErr(e.message === 'stripe_cancel_failed'
+        ? 'Could not cancel your subscription, so the account was not deleted. Try again or contact support.'
+        : (e.message || 'Could not delete the account.'));
+      setDeleting(false);
     }
   }
 
@@ -314,6 +332,37 @@ export default function Settings() {
               <button className="btn" disabled={busy} onClick={changePassword}>Change Password</button>
               <button className="btn" onClick={signOut}>Sign Out</button>
             </div>
+          </div>
+          <div className="border-t border-border pt-3">
+            {deleteOpen ? (
+              <div className="space-y-2">
+                <div className="font-mono text-xs text-muted">
+                  This permanently deletes your account, sites, chats, leads and credit history, and cancels any subscription. It cannot be undone. Type DELETE to confirm.
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    className="input font-mono"
+                    aria-label="Type DELETE to confirm"
+                    value={deleteText}
+                    onChange={(e) => setDeleteText(e.target.value)}
+                  />
+                  <button
+                    className="btn border-accent text-accent shrink-0"
+                    disabled={deleteText !== 'DELETE' || deleting}
+                    onClick={deleteAccount}
+                  >
+                    {deleting ? 'deleting…' : 'Delete Account'}
+                  </button>
+                  <button className="btn shrink-0" disabled={deleting} onClick={() => { setDeleteOpen(false); setDeleteText(''); }}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button className="font-mono text-xs text-muted hover:text-accent" onClick={() => setDeleteOpen(true)}>
+                Delete account…
+              </button>
+            )}
           </div>
         </div>
       </div>
