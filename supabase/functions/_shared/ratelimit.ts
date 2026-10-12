@@ -24,6 +24,7 @@ export const limiters = {
   portal: { limit: 10, windowSeconds: 60, prefix: 'portal' },
   webhook: { limit: 120, windowSeconds: 60, prefix: 'webhook' },
   account: { limit: 5, windowSeconds: 60, prefix: 'account' },
+  referral: { limit: 20, windowSeconds: 60, prefix: 'referral' },
 } as const satisfies Record<string, LimitConfig>;
 
 export type LimiterName = keyof typeof limiters;

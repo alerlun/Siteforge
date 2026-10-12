@@ -5,8 +5,7 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { adminClient } from '../_shared/auth.ts';
 import { getStripeConfig } from '../_shared/stripe.ts';
-import { readBoundedText, errorResponse, fromHttpError, clientIp } from '../_shared/guards.ts';
-import { enforce } from '../_shared/ratelimit.ts';
+import { readBoundedText, errorResponse, fromHttpError } from '../_shared/guards.ts';
 
 const MAX_WEBHOOK_BYTES = 512 * 1024; // Stripe events can be large (invoices, many line items)
 
@@ -37,19 +36,22 @@ async function verifyStripeSignature(
   toleranceSeconds = 300,
 ): Promise<boolean> {
   if (!header || !secret) return false;
-  const parts = Object.fromEntries(
-    header.split(',').map((p) => {
-      const idx = p.indexOf('=');
-      return [p.slice(0, idx), p.slice(idx + 1)];
-    }),
-  );
-  const t = parts['t'];
-  const v1 = parts['v1'];
-  if (!t || !v1) return false;
+  // The header can carry several v1 signatures (e.g. while a secret is being rolled),
+  // so collect all of them rather than keeping only the last (AUDIT-APP.md L6).
+  let t = '';
+  const signatures: string[] = [];
+  for (const part of header.split(',')) {
+    const idx = part.indexOf('=');
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key === 't') t = value;
+    else if (key === 'v1') signatures.push(value);
+  }
+  if (!t || !signatures.length) return false;
   const ts = parseInt(t, 10);
   if (Math.abs(Date.now() / 1000 - ts) > toleranceSeconds) return false;
   const expected = await hmacSha256Hex(secret, `${t}.${body}`);
-  return timingSafeEqual(expected, v1);
+  return signatures.some((sig) => timingSafeEqual(expected, sig));
 }
 
 Deno.serve(async (req) => {
@@ -58,12 +60,8 @@ Deno.serve(async (req) => {
     return new Response('Method not allowed', { status: 405, headers: corsHeaders });
   }
 
-  try {
-    const ipBlocked = await enforce('webhook', clientIp(req));
-    if (ipBlocked) return ipBlocked;
-  } catch (err) {
-    return fromHttpError(err);
-  }
+  // No IP rate limit: Stripe sends from shared IPs, so bursts got 429 and delayed
+  // upgrades. The signature check below is the protection (AUDIT-APP.md L7).
 
   let body: string;
   try {
@@ -73,21 +71,44 @@ Deno.serve(async (req) => {
   }
   const sig = req.headers.get('stripe-signature');
 
-  let secret = '';
+  // Verify with the active mode's secret, then with the other mode's. Events from the
+  // other mode used to be rejected and retried by Stripe for days; they are now
+  // acknowledged but not applied, so test payments never change live data
+  // (AUDIT-APP.md L5).
+  let activeMode: 'test' | 'live';
+  let activeSecret = '';
   try {
-    secret = (await getStripeConfig()).webhookSecret;
+    const cfg = await getStripeConfig();
+    activeMode = cfg.mode;
+    activeSecret = cfg.webhookSecret;
   } catch (err) {
     return fromHttpError(err);
   }
+  const otherSecret = activeMode === 'live'
+    ? (Deno.env.get('STRIPE_WEBHOOK_SECRET_TEST') ?? Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '')
+    : (Deno.env.get('STRIPE_WEBHOOK_SECRET_LIVE') ?? '');
 
-  const ok = await verifyStripeSignature(body, sig, secret);
-  if (!ok) return errorResponse(400, 'invalid signature');
+  let fromOtherMode = false;
+  if (!(await verifyStripeSignature(body, sig, activeSecret))) {
+    if (otherSecret && (await verifyStripeSignature(body, sig, otherSecret))) {
+      fromOtherMode = true;
+    } else {
+      return errorResponse(400, 'invalid signature');
+    }
+  }
 
   let event: any;
   try {
     event = JSON.parse(body);
   } catch {
     return errorResponse(400, 'bad json');
+  }
+
+  if (fromOtherMode || (typeof event.livemode === 'boolean' && event.livemode !== (activeMode === 'live'))) {
+    console.log('[stripe-webhook] ignoring event from the inactive Stripe mode:', event.type, event.id);
+    return new Response(JSON.stringify({ received: true, ignored: 'inactive_mode' }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   const supabase = adminClient();

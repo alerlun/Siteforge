@@ -532,6 +532,21 @@ Deno.serve(async (req) => {
       && /<!DOCTYPE\s+html/i.test(currentHtml)
       && currentHtml.length > 1000;
 
+    // Without enough credits for even the cheaper action, stop before the classifier:
+    // it costs tokens too and used to run for free at a zero balance (AUDIT-APP.md L2).
+    const historyChars = (history ?? []).reduce((n, m) => n + m.content.length, 0);
+    const cheapestEstimate = Math.min(
+      estimateCredits(rates, false, historyChars),
+      hasExistingSite ? estimateCredits(rates, true, historyChars, (currentHtml as string).length) : Infinity,
+    );
+    const balance = Number(profile.credit_balance ?? 0);
+    if (balance < cheapestEstimate) {
+      return new Response(
+        JSON.stringify({ error: 'insufficient_credits', balance, estimate: cheapestEstimate }),
+        { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
     // Edit-vs-new: if a site already exists in this chat, a small model decides per
     // message. Done before the reservation so the right action is reserved (an edit costs
     // ~1/3 of a new build). Its tokens are added to the settled total below.
@@ -547,7 +562,6 @@ Deno.serve(async (req) => {
 
     // Atomically withhold the estimate before the main AI call. NULL = balance too low.
     // Settled to the real cost on success, refunded on failure (see the stream below).
-    const historyChars = (history ?? []).reduce((n, m) => n + m.content.length, 0);
     const estimate = estimateCredits(
       rates, isEditMode, historyChars,
       isEditMode ? (currentHtml as string).length : 0,
@@ -681,14 +695,36 @@ Deno.serve(async (req) => {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error('[generate-site] IIFE error:', msg);
-        // The AI call or saving failed: give the reserved estimate back.
+        // deno-lint-ignore no-explicit-any
+        const e = err as any;
+        // A chat edit the model produced but that could not be applied (edit_failed) has
+        // used real tokens: charge what it cost, at most the reserved estimate
+        // (AUDIT-APP.md L1). Any other failure gives the reserved estimate back.
+        if (!settled && e?.message === 'edit_failed' && totalUsage.output_tokens > 0) {
+          const used = Math.min(computeCredits(totalUsage, rates), estimate);
+          const { error: chargeErr } = await supabase.rpc('settle_credits', {
+            p_ledger_id: reservationId,
+            p_credits: used,
+            p_input_tokens: totalUsage.input_tokens,
+            p_output_tokens: totalUsage.output_tokens,
+            p_cache_write_tokens: totalUsage.cache_creation_input_tokens ?? 0,
+            p_cache_read_tokens: totalUsage.cache_read_input_tokens ?? 0,
+            p_site_id: null,
+          });
+          if (chargeErr) console.error('[generate-site] settle_credits (edit_failed) failed:', reservationId, chargeErr.message);
+          else settled = true;
+        }
         if (!settled) {
           const { error: refundErr } = await supabase.rpc('refund_credits', { p_ledger_id: reservationId });
           if (refundErr) console.error('[generate-site] refund_credits failed:', reservationId, refundErr.message);
         }
-        // deno-lint-ignore no-explicit-any
-        const e = err as any;
-        await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
+        // edit_failed carries a user-facing detail; anything else (Anthropic's response
+        // body, DB errors) stays in the log (AUDIT-APP.md L9).
+        if (e?.detail) {
+          await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
+        } else {
+          await sse({ type: 'error', error: 'Generation failed. Please try again.', status: e?.status ?? 502 });
+        }
       } finally {
         clearInterval(hb);
         try { await writer.close(); } catch { /* already closed */ }

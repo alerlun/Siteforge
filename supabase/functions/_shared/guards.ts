@@ -17,8 +17,10 @@ export function errorResponse(status: number, code: string, detail?: unknown): R
 
 export function fromHttpError(err: unknown): Response {
   if (err instanceof HttpError) return errorResponse(err.status, err.code, err.detail);
-  const msg = err instanceof Error ? err.message : String(err);
-  return errorResponse(500, 'internal_error', msg);
+  // Unexpected errors can carry DB or upstream API text: log it, don't send it
+  // (AUDIT-APP.md L9). HttpErrors above are deliberate and stay as they are.
+  console.error('[internal_error]', err instanceof Error ? err.message : String(err));
+  return errorResponse(500, 'internal_error');
 }
 
 const DEFAULT_MAX_BYTES = 32 * 1024;

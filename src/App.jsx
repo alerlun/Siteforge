@@ -1,14 +1,16 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import Landing from './pages/Landing.jsx';
 import Login from './pages/Login.jsx';
 import Signup from './pages/Signup.jsx';
 import ResetPassword from './pages/ResetPassword.jsx';
 import AppLayout from './pages/AppLayout.jsx';
-import Chat from './pages/Chat.jsx';
 import Privacy from './pages/Privacy.jsx';
 import Terms from './pages/Terms.jsx';
 
+// Loaded on demand so each visitor downloads only the page they open: Landing for
+// visitors, Chat for signed-in users (AUDIT-APP.md L22).
+const Landing  = lazy(() => import('./pages/Landing.jsx'));
+const Chat     = lazy(() => import('./pages/Chat.jsx'));
 const Leads    = lazy(() => import('./pages/Leads.jsx'));
 const Stats    = lazy(() => import('./pages/Stats.jsx'));
 const Settings = lazy(() => import('./pages/Settings.jsx'));
@@ -29,7 +31,7 @@ export default function App() {
   return (
     <>
     <Routes>
-      <Route path="/" element={<Landing />} />
+      <Route path="/" element={<Suspense fallback={null}><Landing /></Suspense>} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/reset-password" element={<ResetPassword />} />
@@ -44,7 +46,7 @@ export default function App() {
         }
       >
         <Route index element={<Navigate to="chat" replace />} />
-        <Route path="chat" element={<Chat />} />
+        <Route path="chat" element={<Suspense fallback={null}><Chat /></Suspense>} />
         <Route path="leads" element={<Suspense fallback={null}><Leads /></Suspense>} />
         <Route path="stats" element={<Suspense fallback={null}><Stats /></Suspense>} />
         <Route path="settings" element={<Suspense fallback={null}><Settings /></Suspense>} />
