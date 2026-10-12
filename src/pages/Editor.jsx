@@ -365,7 +365,8 @@ export default function Editor() {
       // Splice updated element back into full HTML.
       // Primary: direct string replace. Fallback: CSS-path DOM replace (handles
       // browser-normalised outerHTML that won't match the original source string).
-      let newHtml = html.replace(selectedEl.outerHtml, updatedHtml);
+      // Function replacer: a string replacement would treat $&, $` and $' in the AI output as patterns.
+      let newHtml = html.replace(selectedEl.outerHtml, () => updatedHtml);
       if (newHtml === html && selectedEl.path) {
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
