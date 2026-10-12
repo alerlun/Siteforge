@@ -8,6 +8,17 @@ import { estimateCredits, formatCredits, formatCreditsShort, MONTHLY_ALLOWANCE }
 import SaleModal from '../components/SaleModal.jsx';
 import SessionsPanel from '../components/SessionsPanel.jsx';
 
+// generate-site accepts at most 40 history messages of up to 4000 chars each
+// (_shared/validation.ts); longer chats send only the most recent ones.
+const HISTORY_LIMIT = 40;
+const HISTORY_MAX_CHARS = 4000;
+
+function historyFor(messages) {
+  return messages
+    .slice(-HISTORY_LIMIT)
+    .map((m) => ({ role: m.role, content: String(m.content ?? '').slice(0, HISTORY_MAX_CHARS) }));
+}
+
 function useMobile() {
   const [mobile, setMobile] = useState(() => window.innerWidth < 768);
   useEffect(() => {
@@ -58,7 +69,7 @@ export default function Chat() {
   // answers 402 if it turns out to be a (more expensive) new build the balance can't cover.
   const genEstimate = html
     ? estimateCredits('edit', html.length)
-    : estimateCredits('generation', messages.reduce((n, m) => n + (m.content?.length ?? 0), 0));
+    : estimateCredits('generation', historyFor(messages).reduce((n, m) => n + m.content.length, 0));
   const canGenerate = creditBalance >= genEstimate;
   const planLabel = isPro ? '[PRO]' : '[FREE]';
 
@@ -178,7 +189,7 @@ export default function Chat() {
     }
     const userContent = input.trim();
     const userMsg = { role: 'user', content: userContent };
-    const history = messages.map((m) => ({ role: m.role, content: m.content }));
+    const history = historyFor(messages);
     setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setBusy(true);
