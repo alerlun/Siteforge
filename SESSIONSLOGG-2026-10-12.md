@@ -130,12 +130,12 @@ Alla granskades av användaren innan de kördes med `npx supabase db push`, och 
 | Supabase Auth | Redirect URL `<origin>/reset-password` | Gjort |
 | Supabase Auth | Captcha (Turnstile, secret key) | Gjort, verifierat (`captcha_failed` utan token) |
 | Supabase Auth | Confirm email | Gjort |
-| Supabase Auth | Minimum password length 8 | Användarens uppgift (instruktion given, ej bekräftad) |
+| Supabase Auth | Minimum password length 8 | Gjort (bekräftat av användaren) |
 | Cloudflare | Turnstile-widget för domänen | Gjort |
 | Vercel | `VITE_TURNSTILE_SITE_KEY` | Gjort, verifierat i live-bunten |
 | Vercel | `VITE_GA_MEASUREMENT_ID` = `G-WJ8JEY6X62` | Gjort, verifierat: inga anrop före Accept, `gcs=G101` efter |
-| Stripe | Webhook-händelsen `checkout.session.async_payment_succeeded` (test och live) | Användarens uppgift (ej verifierad härifrån) |
-| Google Cloud | Dagsgräns för Place Details + budgetlarm | Användarens uppgift (ej verifierad härifrån) |
+| Stripe | Webhook-händelsen `checkout.session.async_payment_succeeded` (test och live) | Gjort (bekräftat av användaren) |
+| Google Cloud | Dagsgräns för Place Details + budgetlarm | Gjort (bekräftat av användaren) |
 | Supabase | `ALLOWED_ORIGINS` (för betalning från preview-domäner) | Valfritt, ej satt |
 
 ---
@@ -160,8 +160,8 @@ Alla granskades av användaren innan de kördes med `npx supabase db push`, och 
 
 1. **Juridik (M11):** granska Googles villkor för cachning av Places-data och Privacy-texten om lead-data. Alternativ: rensa detaljer efter 30 dagar och behålla `place_id`.
 2. **Supabase Pro (L14):** slå på skyddet mot läckta lösenord om ni uppgraderar.
-3. **Stripe och Google Cloud:** bekräfta att punkterna i avsnitt 7 är gjorda.
-4. **Testkonto:** skapa ett nytt konto och kontrollera att det får credits, för att bekräfta att L15 inte påverkade `handle_new_user`.
+3. ~~Stripe och Google Cloud~~: bekräftat gjort av användaren.
+4. ~~Testkonto~~: skapat av användaren efter L15, registreringen fungerar.
 5. **Vid växande volymer (L20):** aggregering i SQL för Stats och paginerad CSV-export (fler än 1000 leads).
 6. **Gamla typfel:** de sex `deno check`-felen i `ratelimit.ts` och `generate-site`.
 7. **Småsaker från `ARKITEKTUR.md` 8** (oförändrade):
@@ -179,3 +179,10 @@ Alla granskades av användaren innan de kördes med `npx supabase db push`, och 
 - **Vercel kan missa en push.** Under en Vercel-incident deployades inte PR #3 automatiskt. Kontrollera alltid Deployments efter en merge.
 - **`blob:`-URL i iframe.** Att byta `src` lägger till steg i webbläsarens historik. Använd `key` för att skapa om iframen.
 - **Deploy från agenten.** Claude Codes behörighetsklassificerare nekade ibland `functions deploy` och `git push`. Användaren körde då kommandona själv med `!`.
+
+---
+
+## Efterarbete
+
+- Användaren skapade ett testkonto efter L15 (fungerar) och bekräftade inställningarna i avsnitt 7.
+- Repo-städning (`chore-repo-hygiene`): design-dokumenten i `docs/superpowers/` och `.mcp.json` committade; `supabase/.temp/`, `.claude/settings.local.json` och `deno.lock` spåras inte längre (ligger kvar lokalt, nu i `.gitignore`).
