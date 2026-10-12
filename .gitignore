@@ -6,3 +6,9 @@ dist
 .DS_Store
 *.log
 .vite
+.gstack/
+
+# Local tool state (not part of the app)
+deno.lock
+supabase/.temp/
+.claude/settings.local.json
