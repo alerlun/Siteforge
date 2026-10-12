@@ -688,7 +688,13 @@ Deno.serve(async (req) => {
         }
         // deno-lint-ignore no-explicit-any
         const e = err as any;
-        await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
+        // edit_failed carries a user-facing detail; anything else (Anthropic's response
+        // body, DB errors) stays in the log (AUDIT-APP.md L9).
+        if (e?.detail) {
+          await sse({ type: 'error', error: msg, detail: e.detail, status: e.status ?? 502 });
+        } else {
+          await sse({ type: 'error', error: 'Generation failed. Please try again.', status: e?.status ?? 502 });
+        }
       } finally {
         clearInterval(hb);
         try { await writer.close(); } catch { /* already closed */ }

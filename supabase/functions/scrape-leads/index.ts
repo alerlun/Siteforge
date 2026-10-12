@@ -223,7 +223,8 @@ Deno.serve(async (req) => {
         .select();
       if (error) {
         await releaseLeads(user.id, reserved);
-        return new Response(JSON.stringify({ error: error.message }), {
+        console.error('[scrape-leads] insert failed:', error.message);
+        return new Response(JSON.stringify({ error: 'leads_save_failed' }), {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
