@@ -144,6 +144,8 @@ De största riskerna gäller **pengar** (Google Places-kostnad utan tak, credits
 - **Problem:** "Total sites generated" och konverteringsgraden räknar varje chatt-ändring som en ny sajt. Fem ändringar av en sajt ger 6 sajter och en sjättedel så hög konvertering. Sålda sajter markeras dessutom på en enskild version.
 - **Förslag:** Räkna per `session_id` (senaste versionen per session), eller lägg status och pris på `chat_sessions` i stället.
 
+> **Åtgärdat 2026-10-12** (frontend, väntar på Vercel-deploy; inte testat i webbläsare): Stats slår ihop versioner per `session_id` i klienten. En sajt visas med senaste versionens uppgifter, räknas från första versionens datum och räknas som såld om någon version är markerad såld (det är den versionen "Mark Sold"/"Edit" ändrar). Rader utan session räknas var för sig. Ingen DB-ändring. Live idag: 12 rader, 8 utan session och 4 sessioner med en version var, så siffrorna ändras inte förrän någon gör chatt-ändringar.
+
 ### M9. Samma företag kan sparas som lead flera gånger *(kontrollerat)*
 - **Område:** Bugg / Pengar (användarens kvot)
 - **Fil:** `supabase/functions/scrape-leads/index.ts:168-171`; ingen unik nyckel på `leads` (`supabase/schema.sql`)
